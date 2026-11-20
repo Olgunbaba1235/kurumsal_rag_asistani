@@ -10,6 +10,9 @@ Kullanıcıyla Türkçe çalışılır.
 - `src/` — arka uçtan bağımsız RAG çekirdeği (belge işleme, hibrit arama, katı bağlam, atıf/güven). API ve
   Streamlit ortak kullanır. `src/` ChromaDB'yi yalnızca `src/vector_store.py` içinde import eder.
 - `migrations/` — Alembic: `0001` belgeler + RLS, `0002` satış analitiği tabloları + `rag_readonly` rolü.
+- Multi-Agent: `app/services/orchestrator_service.py` (`MultiAgentOrchestrator`) niyeti (DOCUMENT_ONLY/SQL_ONLY/HYBRID)
+  belirler, RAG + Text-to-SQL'i `asyncio.gather` ile paralel çalıştırır, sonucu B2B raporuna sentezler
+  (LLM yoksa/başarısızsa şablon rapor). Uç nokta: `POST /api/v1/agent/query`; şemalar `app/schemas/agent.py`.
 - Çok kiracılık: tenant yalnızca `X-API-Key`'den çözülür; `app/core/db.py` her transaction başında
   `app.tenant_id` + rolü `after_begin` olayıyla ayarlar; tüm tenant tablolarında `FORCE ROW LEVEL SECURITY`.
 - Text-to-SQL: `app/services/sql_guard.py` (sqlglot, deny-by-default) → `rag_readonly` rolü + READ ONLY tx.
@@ -22,6 +25,8 @@ Kullanıcıyla Türkçe çalışılır.
 npm install --prefix tests/pglite        # bir kez: testler için gömülü PostgreSQL (PGlite) + pgvector
 pytest                                    # 167 test; API testleri PGlite üzerinde gerçek Postgres ile
 python scripts/quick_check.py --offline   # Chroma tabanlı çekirdeğin hızlı terminal doğrulaması
+python scripts/dev_pglite.py [--port 8010] [--no-seed]  # Docker'sız dev sunucu: PGlite + tek süreçli uvicorn --factory,
+                                          # açılışta migration + örnek tenant/doküman/demo veri (API anahtarını yazar)
 ```
 
 - PGlite tek backend'dir: testlerde `DB_POOL_SIZE=1` ve tek oturum açık `TestClient` kullanılır; bağlantı
@@ -35,6 +40,7 @@ Tamamlanan fazlar:
 2. Faz 2 — hibrit arama (vektör + BM25Plus + RRF + reranking), sorgu yeniden yazma, katı bağlam, atıf/güven.
 3. Çok kiracılı FastAPI + pgvector backend, Docker Compose, Alembic, RLS, Redis rate limit.
 4. Faz 3 — Text-to-SQL analitik ajanı + `/api/v1/analytics/query` (doküman + veri birleşik yanıt).
+5. Faz 4 — Multi-Agent orkestratör + `/api/v1/agent/query` (henüz otomatik test yok; testler paralel ajanda).
 
 Doğrulanmamış / bilinen açıklar:
 - **Docker Compose hiç çalıştırılmadı** (bu makinede Docker/WSL yok). `docker/postgres/initdb/01-app-role.sh`

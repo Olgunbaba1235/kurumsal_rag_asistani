@@ -9,6 +9,7 @@ from app.core.db import Database
 from app.core.redis import RateLimiter, RedisLike, create_redis
 from app.services.analytics_service import AnalyticsService
 from app.services.document_service import DocumentService
+from app.services.orchestrator_service import MultiAgentOrchestrator
 from app.services.providers import Providers, build_providers
 from app.services.rag_service import RAGService
 from app.services.retrieval_service import PgHybridRetriever
@@ -29,6 +30,7 @@ class ServiceContainer:
     rag: RAGService
     text_to_sql: TextToSQLService
     analytics: AnalyticsService
+    orchestrator: MultiAgentOrchestrator
 
     @classmethod
     def build(
@@ -59,6 +61,7 @@ class ServiceContainer:
             rag=rag,
             text_to_sql=text_to_sql,
             analytics=AnalyticsService(rag, text_to_sql, providers.llm),
+            orchestrator=MultiAgentOrchestrator(rag, text_to_sql, providers.llm),
         )
 
     async def close(self) -> None:
