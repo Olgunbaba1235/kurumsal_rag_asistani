@@ -1,0 +1,31 @@
+# REST API çalışma zamanı bağımlılıkları (Docker imajı). Streamlit/ChromaDB içermez.
+
+# --- Web ---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+
+# --- Veritabanı ---
+sqlalchemy[asyncio]>=2.0.30
+asyncpg>=0.29
+pgvector>=0.3
+alembic>=1.13
+
+# --- Text-to-SQL güvenlik doğrulaması (SQL ayrıştırıcı) ---
+sqlglot>=25
+
+# --- Önbellek / rate limit ---
+redis>=5.0
+
+# --- RAG çekirdeği ---
+google-genai>=1.20
+rank-bm25>=0.2.2
+langchain-text-splitters>=0.3
+pdfplumber>=0.11
+pypdf>=5.0
+python-docx>=1.1
+openpyxl>=3.1
+
+# --- Yapılandırma ---
+pydantic>=2.7
+pydantic-settings>=2.3

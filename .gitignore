@@ -1,0 +1,47 @@
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Gizli bilgiler ---
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+*.pem
+*.key
+
+# --- Uygulama verisi (yerel vektör DB ve yüklenen belgeler) ---
+data/chroma/*
+data/uploads/*
+!data/chroma/.gitkeep
+!data/uploads/.gitkeep
+
+# --- Loglar ---
+*.log
+logs/
+
+# --- Medya ---
+media/
+*.mp4
+*.mov
+*.avi
+*.mp3
+*.wav
+
+# --- Node (test için gömülü PostgreSQL) ---
+node_modules/
+
+# --- IDE / işletim sistemi ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

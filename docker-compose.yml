@@ -1,0 +1,72 @@
+# Tek komutla ayağa kaldırma:  docker compose up -d --build
+# Swagger UI:                  http://localhost:8000/docs
+#
+# Roller:
+#   rag_admin  → PostgreSQL superuser; yalnızca migration'lar (tablo sahibi)
+#   rag_app    → uygulama rolü; superuser DEĞİL → Row-Level Security'ye tabidir
+
+name: kurumsal-rag
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rag
+      POSTGRES_USER: rag_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rag_admin_password}
+      APP_DB_USER: rag_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-rag_app_password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_admin -d rag"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DATABASE_URL: postgresql+asyncpg://rag_app:${APP_DB_PASSWORD:-rag_app_password}@db:5432/rag
+      DATABASE_MIGRATION_URL: postgresql+asyncpg://rag_admin:${POSTGRES_PASSWORD:-rag_admin_password}@db:5432/rag
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8000}:8000"
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000 --workers ${API_WORKERS:-2} --proxy-headers"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+volumes:
+  pgdata:

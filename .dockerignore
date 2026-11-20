@@ -1,0 +1,11 @@
+.venv
+.git
+.env
+**/__pycache__
+.pytest_cache
+data/chroma
+data/uploads
+tests
+scripts/quick_check.py
+.streamlit
+*.md
