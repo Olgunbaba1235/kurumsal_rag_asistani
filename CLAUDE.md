@@ -23,7 +23,8 @@ Kullanıcıyla Türkçe çalışılır.
 ```powershell
 .\.venv\Scripts\activate
 npm install --prefix tests/pglite        # bir kez: testler için gömülü PostgreSQL (PGlite) + pgvector
-pytest                                    # 167 test; API testleri PGlite üzerinde gerçek Postgres ile
+pytest                                    # API testleri PGlite üzerinde gerçek Postgres ile; tests/agent ve UI testleri sahte servislerle
+streamlit run ui/streamlit_app.py         # B2B arayüz (API'ye bağlı; tenant profilleri .streamlit/secrets.toml → [tenants.<id>])
 python scripts/quick_check.py --offline   # Chroma tabanlı çekirdeğin hızlı terminal doğrulaması
 python scripts/dev_pglite.py [--port 8010] [--no-seed]  # Docker'sız dev sunucu: PGlite + tek süreçli uvicorn --factory,
                                           # açılışta migration + örnek tenant/doküman/demo veri (API anahtarını yazar)
@@ -40,14 +41,21 @@ Tamamlanan fazlar:
 2. Faz 2 — hibrit arama (vektör + BM25Plus + RRF + reranking), sorgu yeniden yazma, katı bağlam, atıf/güven.
 3. Çok kiracılı FastAPI + pgvector backend, Docker Compose, Alembic, RLS, Redis rate limit.
 4. Faz 3 — Text-to-SQL analitik ajanı + `/api/v1/analytics/query` (doküman + veri birleşik yanıt).
-5. Faz 4 — Multi-Agent orkestratör + `/api/v1/agent/query` (henüz otomatik test yok; testler paralel ajanda).
+5. Faz 4 — Multi-Agent orkestratör + `/api/v1/agent/query` + `ui/streamlit_app.py` (3 sekme: asistan, doküman
+   yönetimi, veri analitiği; Tenant ID seçici, sohbet ve analiz sonuçları tenant başına ayrı).
+   Testler: `tests/api/test_agent_api.py` (PGlite), `tests/agent/` (sahte RAG/SQL/LLM ile izole orkestratör +
+   uç nokta), `tests/test_ui_app.py` (streamlit AppTest; `/agent/query` yanıtı gerçek uç noktadan).
 
 Doğrulanmamış / bilinen açıklar:
 - **Docker Compose hiç çalıştırılmadı** (bu makinede Docker/WSL yok). `docker/postgres/initdb/01-app-role.sh`
   hiç test edilmedi. Testler PGlite'ın PostgreSQL 18'i üzerinde; compose `pgvector/pgvector:pg16` kullanır.
 - **Gemini hiç çağrılmadı** (API anahtarı yok). Model adları (`gemini-2.5-flash`, `-flash-lite`,
   `gemini-embedding-001`) doğrulanmadı; `MIN_RELEVANCE=0.30` eşiği yalnızca çevrimdışı reranker ile kalibre edildi.
-- Streamlit `app.py` hâlâ eski `src/rag_assistant/` paketini kullanıyor (yeni API'ye bağlı değil).
+- Kök dizindeki eski `app.py` hâlâ `src/rag_assistant/` paketini kullanıyor; yeni arayüz `ui/streamlit_app.py`.
+- Tam pytest paketi Faz 4 eklemelerinden sonra Windows .venv'inde çalıştırılıp toplam sayı doğrulanmadı;
+  `tests/agent/` (45 test) ayrı bir Python 3.13 ortamında geçti.
+- `/agent/query` `MAX_QUESTION_CHARS` ayarını kontrol etmiyor (yalnızca şema sınırı 2000); orkestratör istisnası
+  yakalanmıyor → middleware genel 500 döner (ayrıntı sızmaz, testli).
 - Arka plan ingestion süreç içi (BackgroundTasks); BM25 önbelleği worker başına.
 
 ## Sıradaki adım
@@ -56,5 +64,5 @@ Doğrulanmamış / bilinen açıklar:
    `docker compose up -d --build` → tenant oluştur (`/api/v1/admin/tenants`) → `/health` → `/documents/upload`
    (data/sample_docs) → `/chat/query` → `/analytics/demo-data` + `/analytics/query`. Hata çıkarsa düzelt.
 2. Gerçek `GOOGLE_API_KEY` ile `python scripts/quick_check.py` ve analitik sorgularla eşik/kalite kalibrasyonu.
-3. Sonraki faz adayları: Streamlit/ön yüzü API'ye bağlama · SSE akışlı sohbet · kuyruk tabanlı ingestion (Arq) ·
+3. Sonraki faz adayları: SSE akışlı sohbet · kuyruk tabanlı ingestion (Arq) ·
    kullanıcı düzeyinde departman yetkileri (SSO/OIDC).
