@@ -52,7 +52,7 @@ Tamamlanan fazlar:
 Doğrulanmamış / bilinen açıklar:
 - **Docker Compose hiç çalıştırılmadı** (bu makinede Docker/WSL yok). `docker/postgres/initdb/01-app-role.sh`
   hiç test edilmedi. Testler PGlite'ın PostgreSQL 18'i üzerinde; compose `pgvector/pgvector:pg16` kullanır.
-- **Gemini hiç çağrılmadı** (API anahtarı yok). Model adları (`gemini-2.5-flash`, `-flash-lite`,
+- **Gemini hiç çağrılmadı** (API anahtarı yok). Model adları (`gemini-3.5-flash`, `-flash-lite`,
   `gemini-embedding-001`) doğrulanmadı; `MIN_RELEVANCE=0.30` eşiği yalnızca çevrimdışı reranker ile kalibre edildi.
 - `app.py` = vitrin arayüzü: `src/local_engine.py` (bellek içi depo + `HybridRetriever` + `RAGEngine`; anahtar yoksa
   `OfflineSummarizer` yalnızca bağlam cümlelerini atıfla aktarır), `ui/showcase_theme.py` (CSS, HTML kartlar — tüm
@@ -85,6 +85,13 @@ Doğrulanmamış / bilinen açıklar:
 - `/agent/query` `MAX_QUESTION_CHARS` ayarını kontrol etmiyor (yalnızca şema sınırı 2000); orkestratör istisnası
   yakalanmıyor → middleware genel 500 döner (ayrıntı sızmaz, testli).
 - Arka plan ingestion süreç içi (BackgroundTasks); BM25 önbelleği worker başına.
+- Gemini hata politikası (`src/llm.py`): `call_with_retry` 429/5xx/ağ hatalarını üstel beklemeyle 3 kez dener,
+  400/401/403/404 beklemeden döner; `stream` yalnızca ilk parça gelmeden tekrar dener. `LLMError.user_message`
+  Türkçe; `RAGResponse.error` doluysa yanıt "bilgi yok" reddi DEĞİL servis hatasıdır (Denetçi atlanır, arayüz
+  "Tekrar dene" gösterir). Testler: `tests/test_robustness.py` (sahte `google.genai` ile).
+- Sıcak yenileme: `src/` içinde fonksiyon içinden `from src…` yapmayın (Streamlit modülleri boşaltırken
+  `KeyError: 'src'`); `app.py` yarım/yabancı `src` modüllerini temizleyip yeniden yükler, eski sınıftan kalan
+  çalışma alanını yeniden kurar. Atıf eşleştirme önce uzantılı tam adla yapılır (tr.pdf ≠ tr.docx).
 - Streamlit Cloud: ana dosya `app.py`, yalnızca `requirements.txt` kurulur (sunucu paketi eklemeyin; testi
   `tests/test_deployment.py`). `landing/index.html` statik tanıtım sayfası (CONFIG: demo URL + iletişim e-postası),
   `pazarlama/` lansman metinleri.

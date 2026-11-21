@@ -6,11 +6,17 @@ testlerde sahte embedder enjekte edilir.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import time
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
+
+# Modül düzeyinde import: fonksiyon içinden `from src…` yapmak, Streamlit sıcak yenilemesi `src.*`
+# modüllerini sys.modules'tan çıkarırken aynı anda çalışırsa `KeyError: 'src'` üretir.
+from src.llm import LLMError, call_with_retry
+from src.text_utils import tokenize
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +51,6 @@ class HashingEmbedder:
         self.dimension = dimension
 
     def _vec(self, text: str) -> list[float]:
-        import hashlib
-
-        from src.text_utils import tokenize
-
         v = [0.0] * self.dimension
         for tok in tokenize(text):
             features = [tok] + [tok[i : i + 3] for i in range(max(1, len(tok) - 2))]
@@ -77,24 +79,19 @@ class GeminiEmbedder:
         self.dimension = dimension
 
     def _call(self, batch: list[str], task_type: str, attempts: int = 3):
-        from google.genai import errors, types
+        from google.genai import types
 
-        for attempt in range(1, attempts + 1):
-            try:
-                return self._client.models.embed_content(
+        try:
+            return call_with_retry(
+                lambda: self._client.models.embed_content(
                     model=self.model,
                     contents=batch,
                     config=types.EmbedContentConfig(task_type=task_type, output_dimensionality=self.dimension),
-                )
-            except errors.APIError as exc:
-                code = getattr(exc, "code", 0) or 0
-                if (code == 429 or code >= 500) and attempt < attempts:
-                    delay = 1.5 * 2 ** (attempt - 1)
-                    logger.warning("Embedding API geçici hata (%s), %.1fs sonra tekrar…", code, delay)
-                    time.sleep(delay)
-                    continue
-                raise EmbeddingError(f"Embedding hatası ({code}): {exc}") from exc
-        raise AssertionError("unreachable")  # pragma: no cover
+                ),
+                attempts=attempts, what="Embedding API",
+            )
+        except LLMError as exc:
+            raise EmbeddingError(exc.user_message) from exc
 
     def _embed(self, texts: Sequence[str], task_type: str) -> list[list[float]]:
         vectors: list[list[float]] = []

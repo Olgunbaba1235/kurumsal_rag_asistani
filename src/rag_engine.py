@@ -202,6 +202,9 @@ class RAGResponse:
     timings_ms: dict[str, float]
     warnings: list[str] = field(default_factory=list)
     reranker: str = ""
+    # Servis hatası (ör. Gemini 503/429) nedeniyle yanıt üretilemediyse kullanıcıya gösterilecek Türkçe açıklama.
+    # Bu durum "bilgi dokümanda yok" reddinden ayrıdır; arayüz tekrar denemeyi önerir.
+    error: str = ""
 
     @property
     def total_ms(self) -> float:
@@ -221,7 +224,10 @@ def extract_citations(answer: str, chunks: Sequence[RetrievedChunk]) -> tuple[li
     Dönen değer: (geçerli etiketler — sıralı/tekil, bağlamda olmayan etiketler).
     Model dosya uzantısını atlasa veya büyük/küçük harf farkı olsa da eşleşir.
     """
-    by_key = {(_norm_source(c.source), c.page): c.label for c in chunks}
+    exact = {(fold(c.source).strip(), c.page): c.label for c in chunks}
+    loose: dict[tuple[str, int | None], set[str]] = {}
+    for c in chunks:  # uzantısız eşleşme yalnızca tek adaya karşılık geliyorsa (tr.pdf / tr.docx çakışmasın)
+        loose.setdefault((_norm_source(c.source), c.page), set()).add(c.label)
     valid: list[str] = []
     invalid: list[str] = []
     for bracket in _BRACKET_RE.findall(answer):
@@ -229,7 +235,11 @@ def extract_citations(answer: str, chunks: Sequence[RetrievedChunk]) -> tuple[li
             m = _LABEL_RE.match(part)
             if not m:
                 continue
-            label = by_key.get((_norm_source(m.group("source")), int(m.group("page"))))
+            source, page = m.group("source"), int(m.group("page"))
+            label = exact.get((fold(source).strip(), page))
+            if label is None:
+                candidates = loose.get((_norm_source(source), page), set())
+                label = next(iter(candidates)) if len(candidates) == 1 else None
             if label:
                 if label not in valid:
                     valid.append(label)
@@ -368,6 +378,7 @@ def finalize_response(ctx: dict[str, Any], raw_answer: str, *, min_relevance: fl
         timings_ms=timings,
         warnings=warnings,
         reranker=reranker,
+        error=ctx.get("llm_error_message", "") if refused and llm_error else "",
     )
 
 
@@ -396,9 +407,12 @@ class StreamingAnswer:
                 parts.append(tok)
                 yield tok
         except LLMError as exc:
-            self._ctx["warnings"].append(f"Yanıt üretimi yarıda kesildi: {exc}")
+            logger.warning("Yanıt üretimi başarısız: %s", exc)
+            message = getattr(exc, "user_message", "") or "Yanıt üretilirken bir hata oluştu. Lütfen tekrar deneyin."
+            self._ctx["warnings"].append(f"Yanıt üretimi yarıda kesildi: {message}")
+            self._ctx["llm_error_message"] = message
             if not parts:
-                parts.append("Yanıt üretilirken bir hata oluştu. Lütfen tekrar deneyin.")
+                parts.append(message)
                 yield parts[-1]
             self._ctx["llm_error"] = True
         finally:

@@ -20,3 +20,4 @@ openpyxl>=3.1
 
 # --- Gemini (yalnızca GOOGLE_API_KEY secret'ı tanımlıysa kullanılır) ---
 google-genai>=1.20
+httpx>=0.27  # ağ hatası sınıflandırması (google-genai ile zaten gelir)

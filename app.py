@@ -16,15 +16,47 @@ KPI satırı sorgu işlendikten sonra doldurulur, yani her zaman güncel değeri
 
 from __future__ import annotations
 
+import importlib
+import logging
 import sys
 import time
 import uuid
 from pathlib import Path
 
-# Proje kökü import yoluna: `src.*` ve `ui.*` hangi dizinden/başlatıcıdan çalıştırılırsa çalıştırılsın bulunur.
+# Proje kökü import yolunun başında: `src.*` ve `ui.*` hangi dizinden/başlatıcıdan çalıştırılırsa çalıştırılsın
+# bulunur ve site-packages'taki aynı adlı bir paket (bazı kütüphaneler üst düzey `src` kurar) gölgeleyemez.
 PROJECT_ROOT = Path(__file__).resolve().parent
-if str(PROJECT_ROOT) not in sys.path:
+if sys.path[:1] != [str(PROJECT_ROOT)]:
+    while str(PROJECT_ROOT) in sys.path:
+        sys.path.remove(str(PROJECT_ROOT))
     sys.path.insert(0, str(PROJECT_ROOT))
+_CORE_PACKAGES = ("src", "ui")
+
+
+def _core_is_ours() -> bool:
+    """sys.modules'taki `src`/`ui` bu projeye mi ait ve tutarlı mı (alt modülü olup ebeveyni eksik değil)?"""
+    for pkg in _CORE_PACKAGES:
+        mod = sys.modules.get(pkg)
+        children = any(name.startswith(pkg + ".") for name in list(sys.modules))
+        if mod is None:
+            if children:
+                return False  # sıcak yenileme ebeveyni sildi, çocuklar kaldı → yarım durum
+            continue
+        origin = getattr(mod, "__file__", None) or next(iter(getattr(mod, "__path__", [])), "")
+        if not origin or not Path(origin).resolve().is_relative_to(PROJECT_ROOT):
+            return False  # başka bir `src` paketi
+    return True
+
+
+def _purge_core_modules() -> None:
+    for name in list(sys.modules):
+        if name in _CORE_PACKAGES or name.startswith(tuple(p + "." for p in _CORE_PACKAGES)):
+            sys.modules.pop(name, None)
+    importlib.invalidate_caches()
+
+
+if not _core_is_ours():
+    _purge_core_modules()
 
 import streamlit as st  # noqa: E402
 
@@ -35,13 +67,23 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-from src.auditor import AuditResult  # noqa: E402
-from src.config import get_settings  # noqa: E402
-from src.document_loader import DocumentProcessingError  # noqa: E402
-from src.local_engine import OFFLINE_MODE, AnswerInsight, LocalWorkspace  # noqa: E402
-from src.rag_engine import RAGResponse  # noqa: E402
-from ui import showcase_charts as charts  # noqa: E402
-from ui import showcase_theme as theme  # noqa: E402
+for _attempt in range(3):
+    # Streamlit sıcak yenilemesi (veya başka bir oturumun yenilemesi) `src.*` modüllerini tam bu sırada
+    # sys.modules'tan çıkarırsa import `KeyError: 'src'` ile yarıda kalabilir: temizleyip tekrar dene.
+    try:
+        from src.auditor import AuditResult
+        from src.config import get_settings
+        from src.document_loader import DocumentProcessingError
+        from src.local_engine import OFFLINE_MODE, AnswerInsight, LocalWorkspace
+        from src.rag_engine import RAGResponse
+        from ui import showcase_charts as charts
+        from ui import showcase_theme as theme
+        break
+    except (KeyError, ImportError):
+        if _attempt == 2:
+            raise
+        _purge_core_modules()
+        time.sleep(0.05 * (_attempt + 1))
 
 UPLOAD_TYPES = ["pdf", "docx", "xlsx", "txt", "md"]
 SAMPLE_TENANT = "Örnek Holding A.Ş."
@@ -85,6 +127,11 @@ def _state():  # noqa: ANN202
 
 def workspace(tenant: str) -> LocalWorkspace:
     ss = st.session_state
+    current = ss.workspaces.get(tenant)
+    if current is not None and type(current) is not LocalWorkspace:
+        # Kod sıcak yenilendi: oturumdaki nesne eski sınıfa ait, yeni kodla uyumsuz olabilir → yeniden kur
+        ss.workspaces.pop(tenant)
+        st.toast("♻️ Uygulama güncellendi; bilgi tabanı yeniden hazırlandı.")
     if tenant not in ss.workspaces:
         with st.spinner("Bilgi tabanı hazırlanıyor…"):
             ws = LocalWorkspace(get_settings())
@@ -200,11 +247,18 @@ def sidebar() -> tuple[str, list[str]]:
                     st.toast(f"✅ {doc.filename}: {len(doc.chunks)} parça" if added else f"♻️ {f.name} zaten indeksli")
                 except (DocumentProcessingError, ValueError) as exc:
                     st.error(f"{f.name}: {exc}")
+                except Exception:  # noqa: BLE001 — bozuk/beklenmedik dosya uygulamayı düşürmesin
+                    logging.getLogger(__name__).exception("Belge işlenemedi: %s", f.name)
+                    st.error(f"{f.name}: dosya işlenemedi (bozuk veya desteklenmeyen içerik). "
+                             "Dosyayı yeniden kaydedip tekrar deneyin.")
+        elif submitted:
+            st.warning("Önce yüklenecek bir dosya seçin.")
 
         st.divider()
         if ws.mode == OFFLINE_MODE:
             st.info("Yanıt modu: **Çevrimdışı özetleyici** (yalnızca belge cümleleri). "
-                    "`.env` dosyasına `GOOGLE_API_KEY` ekleyerek Gemini'yi açabilirsiniz.", icon="🔌")
+                    "`.env` dosyasına (yerel) veya Streamlit Cloud **Secrets**'a `GOOGLE_API_KEY` ekleyerek "
+                    "Gemini'yi açabilirsiniz.", icon="🔌")
         else:
             st.success("Yanıt modu: **Gemini** (katı bağlam + atıf doğrulama)", icon="✨")
     return tenant, list(departments)
@@ -293,6 +347,13 @@ def render_answer(msg: dict, *, key: str, delay: float = 0.0, latest: bool = Tru
     resp: RAGResponse = msg["response"]
     audit: AuditResult | None = msg.get("audit")
     insight: AnswerInsight | None = msg.get("insight")
+    if getattr(resp, "error", ""):
+        # Servis hatası (Gemini 429/503…): "bilgi yok" reddi değildir → ayrı uyarı + tekrar dene
+        st.markdown(theme.service_error_card(resp.error), unsafe_allow_html=True)
+        if latest:
+            st.button("🔄 Tekrar dene", key=f"again_{key}", on_click=_submit,
+                      args=(msg.get("question") or resp.question,))
+        return
     audited = audit is not None and audit.status != "skipped"
     text = audit.answer if audited else resp.answer
     if audited:
@@ -316,6 +377,9 @@ def render_answer(msg: dict, *, key: str, delay: float = 0.0, latest: bool = Tru
         f'<div class="meta">{status} · Güven %{resp.confidence if answered else 0} · {resp.total_ms:.0f} ms · '
         f'{len(citations)} kaynak</div>', unsafe_allow_html=True,
     )
+    if insight is not None and insight.empty_index and not answered:
+        st.info("Bu tenant'ın bilgi tabanında henüz belge yok. Kenar çubuğundaki **📤 Belge yükle** bölümünden "
+                f"PDF, DOCX, XLSX, TXT veya MD yükleyin ya da **{SAMPLE_TENANT}** tenant'ını seçin.", icon="📭")
     if insight is not None and insight.filter_note:
         st.markdown(theme.filter_callout(insight.filter_note, insight.filter_probe), unsafe_allow_html=True)
         if latest:  # eski mesajlarda tekrar sorma butonu gösterilmez

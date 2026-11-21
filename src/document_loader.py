@@ -271,13 +271,26 @@ def _load_xlsx(data: bytes) -> list[PageContent]:
 
 
 def _load_text(data: bytes) -> list[PageContent]:
+    # Windows Not Defteri "Unicode" (UTF-16) kaydı: BOM varsa önce ona göre çöz
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            return _split_text_pages(data.decode("utf-16"))
+        except UnicodeDecodeError as exc:
+            raise DocumentProcessingError(f"UTF-16 metin çözülemedi: {exc}") from exc
+    if b"\x00" in data[:4096]:
+        raise DocumentProcessingError("Metin dosyası ikili (binary) içerik barındırıyor; UTF-8 olarak kaydedip tekrar deneyin.")
+    text = data.decode("latin-1")
     for enc in _TEXT_ENCODINGS:
         try:
             text = data.decode(enc)
             break
         except UnicodeDecodeError:
             continue
-    parts = _PAGEBREAK_RE.split(text)
+    return _split_text_pages(text)
+
+
+def _split_text_pages(text: str) -> list[PageContent]:
+    parts = _PAGEBREAK_RE.split(text.replace("\x00", ""))
     return [PageContent(page=i, text=_normalize_text(p)) for i, p in enumerate(parts, start=1)]
 
 
@@ -303,9 +316,8 @@ def load_pages(filename: str, data: bytes) -> list[PageContent]:
         raise DocumentProcessingError(f"'{filename}' boş bir dosya.")
     pages = [p for p in loader(data) if p.text]
     if not pages:
-        raise DocumentProcessingError(
-            f"'{filename}' içinden metin çıkarılamadı (taranmış/görsel bir PDF olabilir)."
-        )
+        hint = " (taranmış/görsel bir PDF olabilir)" if ext == ".pdf" else " (dosya yalnızca boşluk içeriyor)"
+        raise DocumentProcessingError(f"'{filename}' içinden metin çıkarılamadı{hint}.")
     return pages
 
 

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from collections.abc import Iterator, Sequence
@@ -29,10 +30,12 @@ from src.config import Settings, get_settings
 from src.document_loader import ProcessedDocument, process_document
 from src.embeddings import HashingEmbedder
 from src.hybrid_retriever import HybridRetriever, LexicalReranker
-from src.llm import LLMError, Message
+from src.llm import GeminiLLM, LLMError, Message
 from src.rag_engine import RAGEngine, RAGResponse, rewrite_query
 from src.search_types import SearchResult
 from src.text_utils import fold, tokenize
+
+logger = logging.getLogger(__name__)
 
 OFFLINE_MODE = "Çevrimdışı özetleyici"
 GEMINI_MODE = "Gemini"
@@ -205,6 +208,7 @@ class AnswerInsight:
     filter_probe: str = ""  # filtre dışı belgelerde yapılan ön kontrolün sonucu
     outside_departments: list[str] = field(default_factory=list)
     parts: list[PartOutcome] = field(default_factory=list)
+    empty_index: bool = False  # tenant'ın bilgi tabanında hiç belge yok
 
     @property
     def missing_parts(self) -> list[PartOutcome]:
@@ -238,12 +242,10 @@ class LocalWorkspace:
     def _make_llm(api_key: str | None):  # noqa: ANN205
         if api_key:
             try:
-                from src.llm import GeminiLLM
-
                 s = get_settings()
                 return GeminiLLM(api_key, s.llm_model, s.fast_llm_model, s.llm_temperature), GEMINI_MODE
-            except Exception:  # noqa: BLE001 — paket yok/anahtar geçersiz: demo yine çalışsın
-                pass
+            except Exception as exc:  # noqa: BLE001 — paket yok/anahtar geçersiz: demo yine çalışsın
+                logger.warning("Gemini başlatılamadı, çevrimdışı moda geçiliyor: %s", exc)
         return OfflineSummarizer(), OFFLINE_MODE
 
     # ------------------------------------------------------------ belgeler
@@ -279,7 +281,10 @@ class LocalWorkspace:
         """
         depts = list(departments or [])
         response, parts, outcomes = self._research(question, history, depts)
-        if parts is None:
+        if response.error:  # servis hatası: denetlenecek yanıt yok; "bilgi yok" reddi gibi gösterilmez
+            result = AuditResult("skipped", response.answer, "Yanıt üretilemediği için denetim yapılmadı.",
+                                 "—", 0.0, [])
+        elif parts is None:
             result = self.auditor.audit(response) if audit else skipped(response)
         elif audit:
             result = merge_audits(
@@ -329,7 +334,7 @@ class LocalWorkspace:
         parts = split_compound(question)
         if len(parts) < 2:
             full = self.engine.ask(question, history, scope)
-            if full.is_answered:
+            if full.is_answered or full.error:
                 return full, None, []
             parts = split_compound(question, relaxed=True)  # kurtarma: soru sözcüğü şartı olmadan dene
             if len(parts) < 2:
@@ -340,7 +345,7 @@ class LocalWorkspace:
         passing = sum(score >= threshold for _, score in probes)
         if passing == 0 or (passing == len(parts) and full is None):
             full = full or self.engine.ask(question, history, scope)
-            if passing == 0 or full.is_answered:
+            if passing == 0 or full.is_answered or full.error:
                 return full, None, []  # hiçbiri yok → red; tamamı var → soru bütün olarak yanıtlandı
 
         answered: list[tuple[int, str, RAGResponse]] = []
@@ -348,6 +353,8 @@ class LocalWorkspace:
         for i, (part, score) in enumerate(probes, start=1):
             if score >= threshold:
                 r = self.engine.ask(part, history, scope)
+                if r.error:
+                    return r, None, []  # servis hatası: kısmi yanıt kurulmaz, tekrar deneme önerilir
                 if r.is_answered:
                     answered.append((i, part, r))
                     best = max((e.relevance for e in r.evidence), default=0.0)
@@ -378,10 +385,11 @@ class LocalWorkspace:
             threshold=round(self.settings.min_relevance * 100, 1),
             departments=depts,
             parts=outcomes,
+            empty_index=self.store.chunk_count == 0,
         )
         refused = not response.is_answered or result.status == "rejected"
         missing = insight.missing_parts
-        if depts and (refused or missing):
+        if depts and (refused or missing) and not response.error:
             texts = [question] if refused else [o.text for o in missing]
             outside, best = self._outside_matches(texts, depts)
             insight.outside_departments = outside

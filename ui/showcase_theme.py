@@ -403,3 +403,11 @@ def uploader_css(max_mb: int, types: Sequence[str]) -> str:
         "</style>"
     )
 
+
+def service_error_card(message: str) -> str:
+    """Yapay zekâ servisi hatası (429/503…): uydurma engeli rozetinden ayrı, tekrar denenebilir uyarı."""
+    return (
+        '<div class="callout"><b>⚠️ Yanıt şu anda üretilemedi</b>'
+        f'<div class="probe">{esc(message)}</div></div>'
+    )
+
