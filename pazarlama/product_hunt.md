@@ -1,6 +1,6 @@
 # Product Hunt Launch Kit
 
-> Launch at 00:01 PT (Product Hunt day starts in Pacific Time). Live demo: https://jxq2ypt97fhsweii9fwk9r.streamlit.app/ · Replace `[WEBSITE_LINK]` once the landing page is hosted.
+> Launch at 00:01 PT (Product Hunt day starts in Pacific Time). Live demo: https://jxq2ypt97fhsweii9fwk9r.streamlit.app/ · Website: https://olgunbaba1235.github.io/kurumsal_rag_asistani/landing/
 > Gallery: 1270×760 images — (1) hero with an "Auditor Approved" answer, (2) source cards with page numbers,
 > (3) "Not found — fabrication blocked" refusal, (4) department filter explaining a refusal, (5) analytics tab.
 
@@ -39,7 +39,7 @@ The live demo runs in your browser with sample HR & finance policies (in Turkish
 
 We'd love your feedback — especially from legal, accounting and HR teams: what would you need before trusting an AI with your internal documents?
 
-Demo: https://jxq2ypt97fhsweii9fwk9r.streamlit.app/ · Website: [WEBSITE_LINK]
+Demo: https://jxq2ypt97fhsweii9fwk9r.streamlit.app/ · Website: https://olgunbaba1235.github.io/kurumsal_rag_asistani/landing/
 
 ## Short reply templates
 - **"How is this different from ChatGPT with file upload?"** — Retrieval is gated by a relevance threshold, every sentence must carry a citation, and an independent Auditor agent removes unsupported claims before you see the answer. Out-of-scope questions get an explicit "not in your documents".

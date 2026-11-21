@@ -2,7 +2,7 @@
 
 > Hedef kitle: KOBİ sahipleri, genel müdürler, İK / finans / operasyon yöneticileri.
 > Yayın önerisi: Salı–Perşembe, 08:30–10:00. Videoyu doğrudan LinkedIn'e yükleyin (link yerine yerel video daha çok erişim alır); demo linkini ilk yoruma koyun.
-> Canlı demo: https://jxq2ypt97fhsweii9fwk9r.streamlit.app/ · `[TEKLİF_LINK]` yer tutucusunu (teklif sayfası/landing adresi) yayından önce doldurun.
+> Canlı demo: https://jxq2ypt97fhsweii9fwk9r.streamlit.app/ · Teklif formu: https://olgunbaba1235.github.io/kurumsal_rag_asistani/landing/#teklif
 
 ---
 
@@ -48,7 +48,7 @@ Canlı demo (kurulum yok): https://jxq2ypt97fhsweii9fwk9r.streamlit.app/
 
 🎬 Canlı demo — tarayıcıda açılır, kurulum gerekmez: https://jxq2ypt97fhsweii9fwk9r.streamlit.app/
 Demo'da "▶ Başlat"a basın: 4 soruyu kaynaklı yanıtlıyor, 5. soruda (dokümanda olmayan bir bilgi) uydurmayı nasıl engellediğini görüyorsunuz.
-Şirketinize özel kurulum teklifi: [TEKLİF_LINK]
+Şirketinize özel kurulum teklifi: https://olgunbaba1235.github.io/kurumsal_rag_asistani/landing/#teklif
 
 ---
 
