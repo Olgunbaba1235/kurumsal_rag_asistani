@@ -39,8 +39,10 @@
        Yayına almadan önce yalnızca bu iki değeri güncelleyin. -->
   <script>
     window.CONFIG = {
-      DEMO_URL: "https://jxq2ypt97fhsweii9fwk9r.streamlit.app/", // Streamlit Community Cloud canlı link
-      CONTACT_EMAIL: "dagdelenhanim74@gmail.com", // tekliflerin gideceği adres
+      DEMO_URL: "https://kurumsal-rag-pro.streamlit.app/", // Streamlit Community Cloud canlı link
+      CONTACT_EMAIL: "olgundagdelen46@gmail.com", // tekliflerin gideceği adres
+      WHATSAPP: "905439322372", // ülke koduyla, + ve boşluk olmadan
+      LINKEDIN_URL: "https://www.linkedin.com/in/olgun-dagdelen-906430376",
     };
   </script>
 
@@ -195,7 +197,7 @@
       <div class="glass mx-auto grid max-w-6xl gap-10 rounded-3xl p-6 sm:p-10 lg:grid-cols-5">
         <div class="lg:col-span-2">
           <h2 class="text-3xl font-bold text-white">Şirketinize Özel Kurulum Teklifi Alın</h2>
-          <p class="mt-4 text-slate-300">Doküman hacminizi ve kullanıcı sayınızı paylaşın; size uygun kurulum modelini ve fiyatlandırmayı içeren teklifi iletelim.</p>
+          <p class="mt-4 text-slate-300">WhatsApp, e-posta veya LinkedIn'den yazın; doküman hacminize ve kullanıcı sayınıza göre kurulum modelini ve fiyatlandırmayı içeren teklifi iletelim.</p>
           <ul class="mt-6 space-y-2 text-sm text-slate-300">
             <li>✓ Kendi dokümanlarınızla ücretsiz pilot görüşmesi</li>
             <li>✓ Departman yapınıza göre yapılandırma</li>
@@ -203,32 +205,24 @@
           </ul>
           <a data-demo-link href="#" target="_blank" rel="noopener" class="mt-8 inline-flex items-center gap-2 font-semibold text-brand-300 hover:text-brand-400">Önce canlı demoyu deneyin →</a>
         </div>
-        <form id="quote-form" class="grid gap-4 sm:grid-cols-2 lg:col-span-3" novalidate>
-          <label class="text-sm"><span class="text-slate-300">Ad soyad *</span>
-            <input name="name" required autocomplete="name" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none focus:border-brand-400" /></label>
-          <label class="text-sm"><span class="text-slate-300">Şirket *</span>
-            <input name="company" required autocomplete="organization" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none focus:border-brand-400" /></label>
-          <label class="text-sm"><span class="text-slate-300">İş e-postası *</span>
-            <input name="email" type="email" required autocomplete="email" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none focus:border-brand-400" /></label>
-          <label class="text-sm"><span class="text-slate-300">Sektör</span>
-            <select name="sector" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none focus:border-brand-400">
-              <option>Hukuk bürosu</option><option>Mali müşavirlik</option><option>Üretim / sanayi</option><option>Hizmet / perakende</option><option>Diğer</option>
-            </select></label>
-          <label class="text-sm"><span class="text-slate-300">Çalışan sayısı</span>
-            <select name="size" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none focus:border-brand-400">
-              <option>1–20</option><option>21–100</option><option>101–500</option><option>500+</option>
-            </select></label>
-          <label class="text-sm"><span class="text-slate-300">Yaklaşık doküman sayısı</span>
-            <select name="docs" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none focus:border-brand-400">
-              <option>100'den az</option><option>100–1.000</option><option>1.000+</option>
-            </select></label>
-          <label class="text-sm sm:col-span-2"><span class="text-slate-300">Mesajınız</span>
-            <textarea name="message" rows="4" placeholder="Hangi dokümanlar, kaç kullanıcı, öncelikli kullanım senaryosu…" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none placeholder:text-slate-500 focus:border-brand-400"></textarea></label>
-          <div class="sm:col-span-2">
-            <button type="submit" class="w-full rounded-2xl bg-brand-500 px-6 py-3.5 font-semibold text-white shadow-xl shadow-brand-500/30 hover:bg-brand-600 sm:w-auto">Teklif talebini gönder</button>
-            <p id="form-status" class="mt-3 text-sm text-slate-400" role="status">Gönder'e bastığınızda e-posta uygulamanızda talebiniz hazır olarak açılır.</p>
-          </div>
-        </form>
+        <div class="flex flex-col justify-center gap-4 lg:col-span-3">
+          <a data-contact="whatsapp" href="https://wa.me/905439322372?text=Merhaba%2C%20Kurumsal%20RAG%20Asistan%C4%B1%20i%C3%A7in%20demo%20talep%20ediyorum." target="_blank" rel="noopener"
+             class="flex items-center gap-4 rounded-2xl px-5 py-4 transition hover:-translate-y-0.5 bg-[#25D366] text-[#052e16] shadow-xl shadow-[#25D366]/25 hover:bg-[#2fe074]">
+            <svg class="h-8 w-8 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.47 14.38c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.94 1.17-.17.2-.35.22-.65.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.61.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.67-1.61-.92-2.2-.24-.58-.49-.5-.67-.51h-.57c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.07 2.88 1.21 3.08c.15.2 2.1 3.2 5.08 4.49.71.31 1.26.49 1.69.63.71.23 1.36.2 1.87.12.57-.08 1.76-.72 2.01-1.42.25-.7.25-1.29.17-1.42-.07-.12-.27-.2-.57-.35zM12.04 21.5h-.01a9.45 9.45 0 0 1-4.82-1.32l-.35-.21-3.58.94.96-3.49-.23-.36a9.43 9.43 0 0 1-1.45-5.03c0-5.22 4.25-9.47 9.48-9.47a9.42 9.42 0 0 1 9.47 9.48c0 5.22-4.25 9.46-9.47 9.46zm8.06-17.53A11.3 11.3 0 0 0 12.04.63C5.76.63.65 5.74.65 12.02c0 2 .52 3.96 1.52 5.69L.55 23.6l6.04-1.58a11.4 11.4 0 0 0 5.44 1.39h.01c6.28 0 11.39-5.11 11.39-11.39 0-3.04-1.18-5.9-3.33-8.05z"/></svg>
+            <span><span class="block text-lg font-bold">WhatsApp ile Hızlı Demo</span><span class="block text-sm opacity-80">Demo talebi mesajınız hazır olarak açılır</span></span>
+          </a>
+          <a data-contact="email" href="mailto:olgundagdelen46@gmail.com?subject=Kurumsal%20RAG%20Asistan%C4%B1%20%E2%80%94%20Kurulum%20teklifi"
+             class="flex items-center gap-4 rounded-2xl px-5 py-4 transition hover:-translate-y-0.5 bg-brand-500 text-white shadow-xl shadow-brand-500/30 hover:bg-brand-600">
+            <svg class="h-8 w-8 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+            <span><span class="block text-lg font-bold">E-posta Gönder</span><span class="block text-sm opacity-80">olgundagdelen46@gmail.com</span></span>
+          </a>
+          <a data-contact="linkedin" href="https://www.linkedin.com/in/olgun-dagdelen-906430376" target="_blank" rel="noopener"
+             class="flex items-center gap-4 rounded-2xl px-5 py-4 transition hover:-translate-y-0.5 border border-white/15 bg-[#0A66C2]/15 text-white hover:bg-[#0A66C2]/30">
+            <svg class="h-8 w-8 shrink-0 text-[#4ba3f5]" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.86 0-2.14 1.45-2.14 2.94v5.67H9.34V9h3.42v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 1 1 0-4.13 2.06 2.06 0 0 1 0 4.13zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.22 0z"/></svg>
+            <span><span class="block text-lg font-bold">LinkedIn</span><span class="block text-sm text-slate-300">Profili görüntüleyin ve mesaj gönderin</span></span>
+          </a>
+          <p class="text-sm text-slate-400">Doküman hacminizi ve kullanıcı sayınızı yazmanız, teklifi hızlandırır.</p>
+        </div>
       </div>
     </section>
   </main>
@@ -243,25 +237,12 @@
       document.querySelectorAll("[data-demo-link]").forEach((a) => (a.href = cfg.DEMO_URL));
       document.getElementById("year").textContent = new Date().getFullYear();
 
-      const form = document.getElementById("quote-form");
-      const status = document.getElementById("form-status");
-      form.addEventListener("submit", (e) => {
-        e.preventDefault();
-        const d = Object.fromEntries(new FormData(form).entries());
-        if (!d.name.trim() || !d.company.trim() || !form.email.checkValidity()) {
-          status.textContent = "Lütfen ad, şirket ve geçerli bir iş e-postası girin.";
-          status.className = "mt-3 text-sm text-rose-300";
-          return;
-        }
-        const body = [
-          `Ad soyad: ${d.name}`, `Şirket: ${d.company}`, `E-posta: ${d.email}`, `Sektör: ${d.sector}`,
-          `Çalışan sayısı: ${d.size}`, `Doküman sayısı: ${d.docs}`, "", d.message || "",
-        ].join("\n");
-        const subject = `Kurulum teklifi talebi — ${d.company}`;
-        window.location.href = `mailto:${cfg.CONTACT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-        status.textContent = "E-posta uygulamanız açıldı; göndermeyi tamamlamanız yeterli. Açılmadıysa " + cfg.CONTACT_EMAIL + " adresine yazın.";
-        status.className = "mt-3 text-sm text-emerald-300";
-      });
+      const wa = document.querySelector('[data-contact="whatsapp"]');
+      wa.href = `https://wa.me/${cfg.WHATSAPP}?text=${encodeURIComponent("Merhaba, Kurumsal RAG Asistanı için demo talep ediyorum.")}`;
+      const mail = document.querySelector('[data-contact="email"]');
+      mail.href = `mailto:${cfg.CONTACT_EMAIL}?subject=${encodeURIComponent("Kurumsal RAG Asistanı — Kurulum teklifi")}`;
+      mail.querySelector("span span:last-child").textContent = cfg.CONTACT_EMAIL;
+      document.querySelector('[data-contact="linkedin"]').href = cfg.LINKEDIN_URL;
     })();
   </script>
 </body>

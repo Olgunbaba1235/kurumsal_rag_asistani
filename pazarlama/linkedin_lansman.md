@@ -2,7 +2,8 @@
 
 > Hedef kitle: KOBİ sahipleri, genel müdürler, İK / finans / operasyon yöneticileri.
 > Yayın önerisi: Salı–Perşembe, 08:30–10:00. Videoyu doğrudan LinkedIn'e yükleyin (link yerine yerel video daha çok erişim alır); demo linkini ilk yoruma koyun.
-> Canlı demo: https://jxq2ypt97fhsweii9fwk9r.streamlit.app/ · Teklif formu: https://olgunbaba1235.github.io/kurumsal_rag_asistani/landing/#teklif
+> İletişim: olgundagdelen46@gmail.com · WhatsApp +90 543 932 23 72 · https://www.linkedin.com/in/olgun-dagdelen-906430376
+> Canlı demo: https://kurumsal-rag-pro.streamlit.app/ · Teklif formu: https://olgunbaba1235.github.io/kurumsal_rag_asistani/landing/#teklif
 
 ---
 
@@ -26,7 +27,7 @@ Genel sohbet botlarından farkı:
 
 Hukuk bürolarından mali müşavirlere, 50–500 kişilik şirketlere kadar; dokümanla çalışan her ekip için.
 
-👉 Kurulum gerektirmeyen canlı demo ilk yorumda. Kendi dokümanlarınızla denemek isterseniz mesaj atın.
+👉 Kurulum gerektirmeyen canlı demo ilk yorumda. Kendi dokümanlarınızla denemek isterseniz bana mesaj atın ya da WhatsApp'tan yazın: wa.me/905439322372
 
 #yapayzeka #KOBİ #dijitaldönüşüm #İK #bilgiyönetimi #RAG
 
@@ -40,15 +41,17 @@ Kurumsal RAG Asistanı yalnızca sizin dokümanlarınızdan yanıt veriyor, her 
 
 Dokümanda yoksa? "Yer almamaktadır" diyor. Bu kadar.
 
-Canlı demo (kurulum yok): https://jxq2ypt97fhsweii9fwk9r.streamlit.app/
+Canlı demo (kurulum yok): https://kurumsal-rag-pro.streamlit.app/
 
 ---
 
 ## 3. İlk yorum (yayından hemen sonra)
 
-🎬 Canlı demo — tarayıcıda açılır, kurulum gerekmez: https://jxq2ypt97fhsweii9fwk9r.streamlit.app/
+🎬 Canlı demo — tarayıcıda açılır, kurulum gerekmez: https://kurumsal-rag-pro.streamlit.app/
 Demo'da "▶ Başlat"a basın: 4 soruyu kaynaklı yanıtlıyor, 5. soruda (dokümanda olmayan bir bilgi) uydurmayı nasıl engellediğini görüyorsunuz.
 Şirketinize özel kurulum teklifi: https://olgunbaba1235.github.io/kurumsal_rag_asistani/landing/#teklif
+WhatsApp ile hızlı demo: https://wa.me/905439322372?text=Merhaba%2C%20Kurumsal%20RAG%20Asistan%C4%B1%20i%C3%A7in%20demo%20talep%20ediyorum.
+E-posta: olgundagdelen46@gmail.com
 
 ---
 
