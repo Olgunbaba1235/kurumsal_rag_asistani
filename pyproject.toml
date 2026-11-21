@@ -1,8 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "kurumsal-rag-asistani"
 version = "0.1.0"
-description = "Kurumsal dokümanlar için kaynak referanslı RAG asistanı (Gemini + ChromaDB + Streamlit)"
+description = "Kurumsal dokümanlar için kaynak referanslı RAG asistanı (Gemini + hibrit arama + Streamlit + FastAPI)"
 requires-python = ">=3.10"
+
+# `pip install -e .` sonrası `src.*`, `app.*`, `ui.*` ve eski `rag_assistant.*` paketleri
+# hangi dizinden çalıştırılırsa çalıştırılsın import edilebilir.
+[tool.setuptools.packages.find]
+where = [".", "src"]
+include = ["app", "app.*", "src", "src.*", "ui", "ui.*", "rag_assistant", "rag_assistant.*"]
+namespaces = true
 
 [tool.pytest.ini_options]
 pythonpath = [".", "src"]

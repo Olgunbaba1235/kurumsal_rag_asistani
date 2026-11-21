@@ -5,6 +5,8 @@
   sıklıkla Türkçe karakter kullanmadan yazar)
 * Sayı normalizasyonu: "4.500" → "4500", "1.000.000" → "1000000"
 * Stopword temizliği
+* Kısaltma eşitleme: "15 dk" ile "15 dakika" aynı token'a düşer (bkz. ``ABBREVIATIONS``). Hem sorguya hem
+  belgeye uygulandığı için eşleşme simetriktir; kısaltma farkı alaka skorunu eşiğin altına düşürmez.
 * F5 kök bulma: alfabetik token'ların ilk 5 karakteri. Eklemeli bir dil olan
   Türkçe'de bilgi erişimi için basit ama etkili olduğu gösterilmiş bir yöntemdir
   ("izinleri", "izinlerin", "izni" → "izin"/"izinl" … yakın köklere düşer).
@@ -30,6 +32,19 @@ STOPWORDS = frozenset(
 )
 
 
+# Katlanmış (fold) biçimde yaygın kısaltma → tam sözcük. Bilinçli olarak dar tutulur: yalnızca
+# kurumsal belgelerde sık görülen ve başka anlama gelmeyen birim kısaltmaları.
+ABBREVIATIONS = {
+    "dk": "dakika",
+    "dak": "dakika",
+    "sn": "saniye",
+    "sa": "saat",
+    "km": "kilometre",
+    "kg": "kilogram",
+    "lt": "litre",
+}
+
+
 def turkish_lower(text: str) -> str:
     return text.replace("I", "ı").replace("İ", "i").lower()
 
@@ -51,6 +66,7 @@ def tokenize(text: str, *, stem: bool = True, remove_stopwords: bool = True) -> 
         if raw[0].isdigit():
             tokens.append(_normalize_number(raw))
             continue
+        raw = ABBREVIATIONS.get(raw, raw)
         if remove_stopwords and raw in STOPWORDS:
             continue
         if len(raw) < 2:

@@ -1,5 +1,9 @@
 [theme]
-primaryColor = "#4F46E5"
+base = "dark"
+primaryColor = "#7C83FF"
+backgroundColor = "#0A0F1E"
+secondaryBackgroundColor = "#111A2E"
+textColor = "#E2E8F0"
 font = "sans serif"
 
 [server]
@@ -7,3 +11,8 @@ maxUploadSize = 25
 
 [browser]
 gatherUsageStats = false
+
+[client]
+# Vitrin modu: Deploy butonu ve geliştirici menüsü son kullanıcıya gösterilmez
+# (geliştirirken menüye ihtiyaç olursa "auto" yapın).
+toolbarMode = "minimal"

@@ -1,167 +1,463 @@
-﻿"""Kurumsal RAG Asistanı — Streamlit arayüzü.
+"""Kurumsal RAG Asistanı — B2B SaaS vitrin arayüzü (tek komutla çalışır).
 
-Çalıştırma:  streamlit run app.py
+Çalıştırma (proje kökünde, sanal ortam etkinken):
+    streamlit run app.py
+
+Kurulum gerektirmez: örnek kurumsal dokümanlar açılışta bellek içi hibrit indekse yüklenir.
+`.env` içinde GOOGLE_API_KEY varsa yanıtları Gemini üretir; yoksa yalnızca dokümandaki cümleleri
+kaynak atfıyla aktaran çevrimdışı özetleyici çalışır. Çok kiracılı REST API'ye bağlı arayüz için:
+`ui/streamlit_app.py` (bkz. README).
+
+Soru akışı "tam bir kez" ilkesine göre kuruludur: butonlar ve sohbet kutusu soruyu yalnızca bir gelen
+kutusuna (inbox) yazar (callback). Soru yanıtlandığı anda — ekrana çizilmeden önce — sohbete ve oturum
+metriklerine kaydedilir; böylece rerun, yarıda kesilen çizim veya sayfa yenileme sayaçları şişiremez.
+KPI satırı sorgu işlendikten sonra doldurulur, yani her zaman güncel değeri gösterir.
 """
 
 from __future__ import annotations
 
 import sys
+import time
+import uuid
 from pathlib import Path
 
-# `src/` düzenini kurulum gerektirmeden içe aktarılabilir yap.
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+# Proje kökü import yoluna: `src.*` ve `ui.*` hangi dizinden/başlatıcıdan çalıştırılırsa çalıştırılsın bulunur.
+PROJECT_ROOT = Path(__file__).resolve().parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import streamlit as st  # noqa: E402
-from pydantic import SecretStr  # noqa: E402
 
-from rag_assistant.config import get_settings  # noqa: E402
-from rag_assistant.exceptions import RAGError  # noqa: E402
-from rag_assistant.ingestion import SUPPORTED_EXTENSIONS  # noqa: E402
-from rag_assistant.logging_config import setup_logging  # noqa: E402
-from rag_assistant.pipeline import RAGPipeline, cited_indices  # noqa: E402
-from rag_assistant.ui import components  # noqa: E402
-from rag_assistant.ui.styles import CUSTOM_CSS  # noqa: E402
+st.set_page_config(
+    page_title="Kurumsal RAG Asistanı · Kurumsal Bilgi Platformu",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-st.set_page_config(page_title="Kurumsal RAG Asistanı", page_icon="📚", layout="wide")
-st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-setup_logging()
+from src.auditor import AuditResult  # noqa: E402
+from src.config import get_settings  # noqa: E402
+from src.document_loader import DocumentProcessingError  # noqa: E402
+from src.local_engine import OFFLINE_MODE, AnswerInsight, LocalWorkspace  # noqa: E402
+from src.rag_engine import RAGResponse  # noqa: E402
+from ui import showcase_charts as charts  # noqa: E402
+from ui import showcase_theme as theme  # noqa: E402
 
-settings = get_settings()
+UPLOAD_TYPES = ["pdf", "docx", "xlsx", "txt", "md"]
+SAMPLE_TENANT = "Örnek Holding A.Ş."
+TENANTS = {
+    SAMPLE_TENANT: "Örnek İK yönetmeliği ve finans prosedürü yüklü demo şirketi",
+    "Ege Vadi Gıda A.Ş.": "Boş çalışma alanı — kendi belgelerinizi yükleyin",
+}
+SAMPLE_QUESTIONS = [
+    "Fazla mesai ücreti nasıl hesaplanır?",
+    "Uzaktan çalışma kuralları nelerdir?",
+    "Satın almada kaç teklif almak gerekir?",
+    "Yurt içi seyahatte günlük yemek harcırahı ne kadar?",
+]
+# Butonlarda kısa etiket; tıklanınca tam soru gönderilir (etiket kesilmez, tam soru ipucunda görünür)
+SAMPLE_LABELS = [
+    "⏱️ Fazla mesai nasıl hesaplanır?",
+    "🏠 Uzaktan çalışma kuralları",
+    "🧾 Kaç teklif almak gerekir?",
+    "🍽️ Günlük yemek harcırahı",
+]
+DEMO_SCRIPT = [*SAMPLE_QUESTIONS, "Şirketin Mars'taki ofisinin adresi nedir?"]  # son soru: halüsinasyon koruması
+FILTER_KEY = "dept_filter"
+CHAT_KEY = "chat_box"
+ALL_DEPARTMENTS = "Tüm departmanlar"
 
 
-# ------------------------------------------------------------------ kaynaklar
-@st.cache_resource(show_spinner="Asistan hazırlanıyor…")
-def get_pipeline(api_key: str) -> RAGPipeline:
-    cfg = settings.model_copy(update={"google_api_key": SecretStr(api_key)})
-    return RAGPipeline.from_settings(cfg)
+# ====================================================================== durum
+def _state():  # noqa: ANN202
+    ss = st.session_state
+    ss.setdefault("workspaces", {})   # tenant → LocalWorkspace (oturuma özel)
+    ss.setdefault("chats", {})        # tenant → mesajlar
+    ss.setdefault("inbox", [])        # gönderilmiş, henüz yanıtlanmamış sorular (her biri bir kez işlenir)
+    ss.setdefault("demo_queue", [])
+    ss.setdefault("tenant", SAMPLE_TENANT)
+    ss.setdefault(FILTER_KEY, [])     # departman filtresi: varsayılan boş = tüm departmanlar
+    ss.setdefault("stream_delay", 0.012)  # yazma efekti (sn/kelime); testlerde 0
+    ss.setdefault("demo_delay", 0.6)
+    ss.setdefault("auditor_on", True)  # Yüksek Doğruluk (Denetçi Modu) varsayılan açık
+    return ss
 
 
-def init_state() -> None:
-    st.session_state.setdefault("messages", [])
-    st.session_state.setdefault("uploader_key", 0)
+def workspace(tenant: str) -> LocalWorkspace:
+    ss = st.session_state
+    if tenant not in ss.workspaces:
+        with st.spinner("Bilgi tabanı hazırlanıyor…"):
+            ws = LocalWorkspace(get_settings())
+            if tenant == SAMPLE_TENANT:
+                ws.load_sample_documents()
+            ss.workspaces[tenant] = ws
+    return ss.workspaces[tenant]
 
 
-init_state()
+def messages(tenant: str) -> list[dict]:
+    return st.session_state.chats.setdefault(tenant, [])
 
-# ------------------------------------------------------------------ kenar çubuğu
-with st.sidebar:
-    st.markdown("### 🔐 Bağlantı")
-    api_key = settings.api_key
-    if not api_key:
-        api_key = st.text_input(
-            "Google API anahtarı",
-            type="password",
-            help="`.env` dosyasında GOOGLE_API_KEY tanımlarsanız bu alan gizlenir.",
+
+# ====================================================================== callback'ler (gövdeden önce çalışır)
+def _submit(text: str, departments: list[str] | None = None) -> None:
+    """Soruyu gelen kutusuna yazar. `departments=None` → işlendiği andaki aktif filtre kullanılır."""
+    text = (text or "").strip()
+    if text:
+        ss = st.session_state
+        ss.inbox.append({"id": uuid.uuid4().hex, "tenant": ss.tenant, "text": text,
+                         "departments": departments})
+
+
+def _on_chat_submit() -> None:
+    _submit(st.session_state.get(CHAT_KEY) or "")
+
+
+def _clear_filter() -> None:
+    st.session_state[FILTER_KEY] = []
+
+
+def _retry_without_filter(question: str) -> None:
+    _clear_filter()
+    _submit(question, departments=[])
+
+
+def _reset_tenant_session(tenant: str) -> None:
+    ss = st.session_state
+    ss.chats[tenant] = []
+    ss.inbox = [s for s in ss.inbox if s["tenant"] != tenant]
+    if tenant in ss.workspaces:
+        ss.workspaces[tenant].reset_history()  # "X sorgu bu oturumda" sohbetle birlikte sıfırlanır
+
+
+def _start_demo() -> None:
+    ss = st.session_state
+    ss.tenant = SAMPLE_TENANT
+    _clear_filter()
+    _reset_tenant_session(SAMPLE_TENANT)
+    ss.demo_queue = list(DEMO_SCRIPT)
+
+
+def _stop_demo() -> None:
+    st.session_state.demo_queue = []
+
+
+def _remove_document(ws: LocalWorkspace, doc_id: str) -> None:
+    ws.store.remove_document(doc_id)
+
+
+# ====================================================================== kenar çubuğu
+def sidebar() -> tuple[str, list[str]]:
+    ss = st.session_state
+    with st.sidebar:
+        st.markdown("### 🧠 Kurumsal RAG Asistanı")
+        st.caption("Kaynak atıflı kurumsal bilgi platformu")
+
+        tenant = st.selectbox(
+            "Aktif tenant (şirket)", list(TENANTS), key="tenant", on_change=_clear_filter,
+            help="Her tenant'ın bilgi tabanı ve sohbet geçmişi birbirinden tamamen ayrıdır.",
         )
+        st.caption(TENANTS[tenant])
+        ws = workspace(tenant)
+        options = list(ws.settings.departments)
+        current = list(ss.get(FILTER_KEY) or [])
+        if any(d not in options for d in current):  # eski/geçersiz seçim takılı kalmasın
+            ss[FILTER_KEY] = [d for d in current if d in options]
+        departments = st.multiselect(
+            "Departman filtresi", options, key=FILTER_KEY, placeholder=ALL_DEPARTMENTS,
+            help="Boş bırakılırsa tüm departmanların belgelerinde arama yapılır. Filtre seçilirse yalnızca "
+                 "o departmanların belgeleri taranır; filtre nedeniyle reddedilen soruda nedeni gösterilir.",
+        )
+        st.toggle(
+            "🛡️ Yüksek Doğruluk (Denetçi Modu)", key="auditor_on",
+            help="Araştırmacı ajanın yanıtı, Denetçi ajan tarafından yalnızca getirilen kaynak parçalarıyla "
+                 "karşılaştırılır; kaynakta geçmeyen sayı/tarih/oran veya bilgi düzeltilir ya da reddedilir.",
+        )
+        st.caption(f"Denetçi: {ws.auditor.name}" if ss.auditor_on else "Denetçi kapalı: yanıtlar denetlenmeden gösterilir.")
+
+        st.divider()
+        st.markdown("**🎬 Canlı Demo Modu**")
+        st.caption("Hazır soruları sırayla sorar; kaynak kartlarını ve halüsinasyon korumasını gösterir.")
+        c1, c2 = st.columns(2)
+        c1.button("▶ Başlat", type="primary", width="stretch", disabled=bool(ss.demo_queue),
+                  on_click=_start_demo)
+        c2.button("⏹ Durdur", width="stretch", disabled=not ss.demo_queue, on_click=_stop_demo)
+        st.button("🧹 Sohbeti temizle", width="stretch", on_click=_reset_tenant_session, args=(tenant,),
+                  help="Sohbeti ve bu tenant'ın oturum metriklerini (sorgu sayısı, ortalama güven) sıfırlar.")
+
+        st.divider()
+        st.markdown("**📤 Belge yükle**")
+        max_mb = int(st.get_option("server.maxUploadSize") or 25)
+        st.markdown(theme.uploader_css(max_mb, UPLOAD_TYPES), unsafe_allow_html=True)
+        with st.form("upload", clear_on_submit=True):
+            files = st.file_uploader("Belgeler", type=UPLOAD_TYPES, accept_multiple_files=True,
+                                     help=f"PDF, DOCX, XLSX, TXT veya MD · dosya başına en fazla {max_mb} MB")
+            dept = st.selectbox("Departman", ws.settings.departments)
+            submitted = st.form_submit_button("İndeksle", width="stretch")
+        if submitted and files:
+            for f in files:
+                try:
+                    doc, added = ws.add_bytes(f.name, f.getvalue(), dept)
+                    st.toast(f"✅ {doc.filename}: {len(doc.chunks)} parça" if added else f"♻️ {f.name} zaten indeksli")
+                except (DocumentProcessingError, ValueError) as exc:
+                    st.error(f"{f.name}: {exc}")
+
+        st.divider()
+        if ws.mode == OFFLINE_MODE:
+            st.info("Yanıt modu: **Çevrimdışı özetleyici** (yalnızca belge cümleleri). "
+                    "`.env` dosyasına `GOOGLE_API_KEY` ekleyerek Gemini'yi açabilirsiniz.", icon="🔌")
+        else:
+            st.success("Yanıt modu: **Gemini** (katı bağlam + atıf doğrulama)", icon="✨")
+    return tenant, list(departments)
+
+
+# ====================================================================== bileşenler
+def kpi_row(tenant: str, ws: LocalWorkspace) -> None:
+    docs = ws.documents
+    hist = ws.history  # yalnızca gerçekten yanıtlanan kullanıcı/demo sorguları (tam bir kez kaydedilir)
+    avg_conf = round(sum(h.confidence for h in hist) / len(hist)) if hist else None
+    avg_ms = round(sum(h.total_ms for h in hist) / len(hist)) if hist else None
+    healthy = ws.store.chunk_count > 0
+    cards = [
+        theme.kpi_card("📚", "Doküman", str(len(docs)), f"{ws.store.chunk_count} bilgi parçası indeksli"),
+        theme.kpi_card("🏢", "Aktif tenant", tenant, "İzole çalışma alanı · ayrı indeks", small=True,
+                       dot=theme.SUCCESS),
+        theme.kpi_card("🩺", "Sistem sağlığı", "Sağlıklı" if healthy else "Hazır · indeks boş",
+                       f"Arama: vektör + BM25 + RRF · {ws.mode}", small=True,
+                       dot=theme.SUCCESS if healthy else theme.WARNING),
+        theme.kpi_card("🎯", "Ortalama güven", f"%{avg_conf}" if avg_conf is not None else "—",
+                       f"{len(hist)} sorgu bu oturumda"),
+        theme.kpi_card("⚡", "Ortalama yanıt", f"{avg_ms} ms" if avg_ms is not None else "—",
+                       "Arama + yanıt üretimi"),
+    ]
+    for col, card in zip(st.columns(len(cards)), cards, strict=True):
+        col.markdown(card, unsafe_allow_html=True)
+
+
+class KpiSlot:
+    """KPI satırının yeri sayfanın üstünde ayrılır; içeriği sorgular işlendikten sonra (bir kez) çizilir."""
+
+    def __init__(self, tenant: str, ws: LocalWorkspace):
+        self._box = st.container()
+        self._tenant, self._ws = tenant, ws
+        self._done = False
+
+    def render(self) -> None:
+        if not self._done:
+            self._done = True
+            with self._box:
+                kpi_row(self._tenant, self._ws)
+
+
+def render_chart(fig) -> None:  # noqa: ANN001
+    if charts.PLOTLY:
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
     else:
-        st.success("API anahtarı `.env` üzerinden yüklendi.", icon="✅")
+        st.vega_lite_chart(spec=fig, width="stretch")
 
-if not api_key:
-    components.hero()
-    st.info("Başlamak için kenar çubuğuna Google Gemini API anahtarınızı girin.", icon="🔑")
-    st.stop()
 
-try:
-    pipeline = get_pipeline(api_key)
-except RAGError as exc:
-    st.error(str(exc))
-    st.stop()
+# Rapor bu uyarıları metrik/alt soru satırı olarak gösterir; ayrıca not olarak tekrarlanmaz
+_FOLDED_WARNINGS = ("Yeterince alakalı bağlam bulunamadı", "Bileşik soru")
 
-with st.sidebar:
-    st.markdown("### 📤 Doküman Yükle")
-    uploads = st.file_uploader(
-        "PDF, DOCX veya TXT",
-        type=[e.lstrip(".") for e in SUPPORTED_EXTENSIONS],
-        accept_multiple_files=True,
-        key=f"uploader_{st.session_state.uploader_key}",
-        help=f"Dosya başına en fazla {settings.max_file_size_mb} MB.",
-    )
-    if uploads and st.button("İndeksle", type="primary", width="stretch"):
-        progress = st.progress(0.0, text="Başlıyor…")
-        for i, f in enumerate(uploads, start=1):
-            progress.progress((i - 1) / len(uploads), text=f"İşleniyor: {f.name}")
-            try:
-                res = pipeline.ingest(f.name, f.getvalue())
-                if res.skipped:
-                    st.toast(f"{res.filename}: zaten indekslenmiş", icon="ℹ️")
-                else:
-                    st.toast(f"{res.filename}: {res.message}", icon="✅")
-            except RAGError as exc:
-                st.error(f"{f.name}: {exc}")
-        progress.progress(1.0, text="Tamamlandı")
-        st.session_state.uploader_key += 1  # yükleyiciyi temizle
-        st.rerun()
 
-    documents = pipeline.store.list_documents()
+def render_retrieval_facts(resp: RAGResponse, insight: AnswerInsight | None) -> None:
+    """Rapor gövdesi: en iyi alaka/eşik/kapsam, filtre uyarısı, alt sorular ve kalan doğrulama notları."""
+    if insight is not None:
+        st.markdown(theme.retrieval_facts(insight.best_relevance, insight.threshold, insight.departments),
+                    unsafe_allow_html=True)
+        if insight.filter_note:
+            st.markdown(theme.filter_fact(insight.departments, insight.filter_probe), unsafe_allow_html=True)
+        if insight.parts:
+            st.markdown("**Alt sorular**")
+            st.markdown("".join(theme.part_row(p.text, p.answered, p.relevance) for p in insight.parts),
+                        unsafe_allow_html=True)
+    for w in resp.warnings:
+        if insight is None or not w.startswith(_FOLDED_WARNINGS):
+            st.caption(f"ℹ️ {w}")
 
-    st.markdown("### 🗂️ Bilgi Tabanı")
-    if not documents:
-        st.caption("Henüz doküman yok.")
-    selected_hashes: list[str] = []
-    for doc in documents:
-        c1, c2 = st.columns([0.82, 0.18], vertical_alignment="center")
-        with c1:
-            if st.checkbox(
-                f"{doc.filename}",
-                value=True,
-                key=f"sel_{doc.file_hash}",
-                help=f"{doc.chunk_count} parça · {doc.file_type.upper()}",
-            ):
-                selected_hashes.append(doc.file_hash)
-        with c2:
-            if st.button("🗑️", key=f"del_{doc.file_hash}", help="Dokümanı sil"):
-                pipeline.delete_document(doc.file_hash)
-                st.rerun()
 
-    with st.expander("⚙️ Gelişmiş ayarlar"):
-        top_k = st.slider("Getirilecek parça sayısı (top-k)", 1, 15, settings.top_k)
-        temperature = st.slider("Yaratıcılık (temperature)", 0.0, 1.0, settings.llm_temperature, 0.05)
-        if st.button("Sohbeti temizle", width="stretch"):
-            st.session_state.messages = []
-            st.rerun()
+def render_audit_report(audit: AuditResult, resp: RAGResponse, insight: AnswerInsight | None) -> None:
+    """Tek, sade "Denetçi Kontrol Raporu": karar özeti + arama metrikleri + iddia kontrolleri (rozetsiz)."""
+    with st.expander("🛡️ Denetçi Kontrol Raporu"):
+        st.markdown(f"**Özet:** {audit.summary}")
+        st.caption(f"Denetçi: {audit.method} · Denetim süresi: {audit.duration_ms:.1f} ms · "
+                   f"{len(audit.checks)} iddia kontrol edildi")
+        render_retrieval_facts(resp, insight)
+        if audit.checks:
+            st.markdown("**İddia kontrolleri**")
+            for c in audit.checks:
+                st.markdown(theme.audit_row(c.text, c.reason, c.supported), unsafe_allow_html=True)
 
-# ------------------------------------------------------------------ ana alan
-components.hero()
-components.stats(len(documents), pipeline.store.count(), settings.llm_model)
 
-if not st.session_state.messages:
+def render_answer(msg: dict, *, key: str, delay: float = 0.0, latest: bool = True) -> None:
+    """Yanıt metni (Denetçi kararıyla) + rozet + meta satırı + filtre nedeni + kaynak kartları + rapor."""
+    resp: RAGResponse = msg["response"]
+    audit: AuditResult | None = msg.get("audit")
+    insight: AnswerInsight | None = msg.get("insight")
+    audited = audit is not None and audit.status != "skipped"
+    text = audit.answer if audited else resp.answer
+    if audited:
+        st.markdown(theme.audit_badge(audit.status), unsafe_allow_html=True)
+    if delay > 0:
+        def words():
+            for w in text.split(" "):
+                yield w + " "
+                time.sleep(delay)
+        st.write_stream(words)
+    else:
+        st.markdown(text)
+
+    answered = resp.is_answered and not (audited and audit.status == "rejected")
+    partial = bool(insight and insight.missing_parts) and answered
+    status = ("🧩 Kısmi kaynaklı yanıt" if partial else "✅ Kaynaklı yanıt") if answered \
+        else "🛡️ Bilgi yok — uydurma yanıt engellendi"
+    # Gösterilen metinde atfı kalan kaynaklar (Denetçi bir iddiayı çıkardıysa kartı da gizlenir)
+    citations = ([c for c in resp.citations if f"[{c.label}]" in text] or resp.citations) if answered else []
     st.markdown(
-        "Örnek sorular: *“İzin politikası kaç gün yıllık izin tanıyor?”*, "
-        "*“Satın alma onay süreci nasıl işliyor?”*"
+        f'<div class="meta">{status} · Güven %{resp.confidence if answered else 0} · {resp.total_ms:.0f} ms · '
+        f'{len(citations)} kaynak</div>', unsafe_allow_html=True,
     )
+    if insight is not None and insight.filter_note:
+        st.markdown(theme.filter_callout(insight.filter_note, insight.filter_probe), unsafe_allow_html=True)
+        if latest:  # eski mesajlarda tekrar sorma butonu gösterilmez
+            st.button("🔓 Filtreyi kaldır ve tüm belgelerde sor", key=f"retry_{key}",
+                      on_click=_retry_without_filter, args=(msg.get("question") or resp.question,))
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"], avatar="🧑‍💼" if msg["role"] == "user" else "📚"):
-        st.markdown(msg["content"])
-        if msg["role"] == "assistant":
-            components.sources_panel(msg.get("sources", []), msg.get("cited", []))
+    if citations or audited:
+        left, right = st.columns([3, 2]) if (citations and audited) else (st.container(), st.container())
+        if citations:
+            with left:
+                with st.expander(f"📎 Kaynaklar ({len(citations)}) — bilginin alındığı doküman ve sayfa",
+                                 expanded=False):
+                    for c in citations:
+                        st.markdown(theme.citation_card(c.label, c.source, c.page, c.department, c.relevance,
+                                                        c.evidence), unsafe_allow_html=True)
+        if audited:
+            with right:
+                render_audit_report(audit, resp, insight)
+    if not audited and (insight is not None or resp.warnings):
+        with st.expander("ℹ️ Doğrulama notları"):
+            render_retrieval_facts(resp, insight)
 
-placeholder = "Dokümanlarınız hakkında bir soru sorun…" if documents else "Önce bir doküman yükleyin"
-if question := st.chat_input(placeholder, disabled=not documents):
-    history = [(m["role"], m["content"]) for m in st.session_state.messages]
-    st.session_state.messages.append({"role": "user", "content": question})
+
+def process_submission(tenant: str, ws: LocalWorkspace, question: str, departments: list[str], *,
+                       on_recorded, animate: bool = True) -> None:  # noqa: ANN001
+    """Soruyu yanıtlar, sonucu **çizimden önce** kaydeder (tam bir kez), ardından yanıtı çizer."""
+    ss = st.session_state
+    msgs = messages(tenant)
+    history = [(m["role"], m["content"]) for m in msgs]
     with st.chat_message("user", avatar="🧑‍💼"):
         st.markdown(question)
+    with st.chat_message("assistant", avatar="🧠"):
+        auditing = bool(ss.auditor_on)
+        spinner = ("Araştırmacı yanıt hazırlıyor, Denetçi kaynaklarla doğruluyor…" if auditing
+                   else "Hibrit arama yapılıyor ve kaynaklar doğrulanıyor…")
+        with st.spinner(spinner):
+            turn = ws.run(question, history, departments, audit=auditing)
+            # Kayıt: ws.run ile bu satırlar arasında Streamlit çağrısı yok → rerun burayı bölemez
+            msgs.append({"role": "user", "content": question})
+            msgs.append({"role": "assistant", "content": turn.audit.answer, "question": question,
+                         "response": turn.response, "audit": turn.audit, "insight": turn.insight})
+            on_recorded()
+        render_answer(msgs[-1], key=str(len(msgs) - 1), delay=ss.stream_delay if animate else 0.0)
 
-    with st.chat_message("assistant", avatar="📚"):
-        try:
-            if not selected_hashes:
-                raise RAGError("Aramaya dahil edilecek en az bir doküman seçin.")
-            with st.spinner("İlgili bölümler aranıyor…"):
-                result = pipeline.ask_stream(
-                    question,
-                    history,
-                    top_k=top_k,
-                    temperature=temperature,
-                    file_hashes=selected_hashes if len(selected_hashes) < len(documents) else None,
-                )
-            answer = st.write_stream(result.stream)
-            answer = answer if isinstance(answer, str) else "".join(map(str, answer))
-            cited = cited_indices(answer, len(result.sources))
-            components.sources_panel(result.sources, cited)
-            st.session_state.messages.append(
-                {"role": "assistant", "content": answer, "sources": result.sources, "cited": cited}
-            )
-        except RAGError as exc:
-            st.error(str(exc))
-            st.session_state.messages.pop()  # başarısız soruyu geçmişe yazma
+
+# ====================================================================== sekmeler
+def tab_assistant(tenant: str, ws: LocalWorkspace, departments: list[str], kpis: KpiSlot) -> None:
+    ss = st.session_state
+    msgs = messages(tenant)
+    waiting = [s for s in ss.inbox if s["tenant"] == tenant]
+    if not msgs and not waiting and not ss.demo_queue:
+        st.markdown('<div class="section-title">💡 Hızlı başlangıç — örnek sorular</div>', unsafe_allow_html=True)
+        cols = st.columns(len(SAMPLE_QUESTIONS))
+        for i, (col, label, q) in enumerate(zip(cols, SAMPLE_LABELS, SAMPLE_QUESTIONS, strict=True)):
+            col.button(label, key=f"sample_{i}", width="stretch", help=q, on_click=_submit, args=(q,))
+        if not ws.documents:
+            st.info("Bu tenant'ın bilgi tabanı boş. Kenar çubuğundan belge yükleyin veya "
+                    f"**{SAMPLE_TENANT}** tenant'ını seçin.", icon="📭")
+
+    for i, m in enumerate(msgs):
+        with st.chat_message(m["role"], avatar="🧑‍💼" if m["role"] == "user" else "🧠"):
+            if m["role"] == "assistant" and m.get("response") is not None:
+                render_answer(m, key=str(i), latest=i == len(msgs) - 1 and not waiting)
+            else:
+                st.markdown(m["content"])
+
+    # 1) Kullanıcı gönderimleri (buton / sohbet kutusu / filtresiz yeniden sor): sırayla, her biri bir kez
+    for sub in waiting:
+        process_submission(tenant, ws, sub["text"],
+                           departments if sub["departments"] is None else list(sub["departments"]),
+                           on_recorded=lambda sub=sub: ss.inbox.remove(sub))
+
+    # 2) Canlı demo: çalıştırma başına bir soru (animasyonlu), ardından rerun
+    if ss.demo_queue and tenant == SAMPLE_TENANT:
+        question = ss.demo_queue[0]
+        st.toast(f"🎬 Demo: {question}")
+        process_submission(tenant, ws, question, [], on_recorded=lambda: ss.demo_queue.pop(0))
+        kpis.render()  # demo adımları rerun ile bittiği için KPI burada güncellenir
+        if ss.demo_queue:
+            time.sleep(ss.demo_delay)
+        else:
+            st.toast("🎬 Demo tamamlandı")
+        st.rerun()
+
+    scope = ALL_DEPARTMENTS if not departments else f"{', '.join(departments)} (filtre aktif)"
+    st.caption(f"🔎 Arama kapsamı: {scope}")
+    st.chat_input("Kurumsal dokümanlarınıza bir soru sorun…", key=CHAT_KEY, on_submit=_on_chat_submit)
+
+
+def tab_analytics(ws: LocalWorkspace) -> None:
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        render_chart(charts.usage_figure(charts.sample_usage(), session_queries=len(ws.history)))
+    with c2:
+        render_chart(charts.department_figure(charts.department_counts(ws.documents)))
+    points = charts.quality_points(ws.history)
+    if points:
+        render_chart(charts.quality_figure(points))
+    else:
+        st.caption("Soru sordukça bu oturumdaki her sorgunun güven skoru ve yanıt süresi burada görünecek.")
+    if not charts.PLOTLY:
+        st.caption("Plotly kurulu değil; grafikler yedek çizimle gösteriliyor. `pip install plotly` ile etkileşimli grafikleri açın.")
+
+
+def tab_library(ws: LocalWorkspace) -> None:
+    docs = ws.documents
+    if not docs:
+        st.info("Henüz belge yok. Kenar çubuğundan PDF/DOCX/XLSX/TXT/MD yükleyebilirsiniz.", icon="📭")
+        return
+    for d in docs:
+        c1, c2 = st.columns([12, 1])
+        c1.markdown(theme.doc_row(d.filename, d.department, d.page_count, d.chunk_count, d.file_type),
+                    unsafe_allow_html=True)
+        c2.button("🗑️", key=f"del_{d.doc_id}", help=f"{d.filename} belgesini indeksten çıkar",
+                  on_click=_remove_document, args=(ws, d.doc_id))
+
+
+# ====================================================================== ana akış
+def main() -> None:
+    _state()
+    st.markdown(theme.CSS, unsafe_allow_html=True)
+    tenant, departments = sidebar()
+    ws = workspace(tenant)
+
+    st.markdown(theme.hero(
+        "Kurumsal bilgiye saniyeler içinde, kaynağıyla ulaşın",
+        "Politika, prosedür ve sözleşmelerinizi yükleyin; çalışanlarınız doğal dilde sorsun. Her yanıt, "
+        "bilginin alındığı dokümanın ve sayfanın atfıyla gelir — dokümanda olmayan bilgi asla uydurulmaz.",
+        [("Hibrit arama · Vektör + BM25 + RRF", ""), ("Sayfa düzeyinde kaynak atfı", "cyan"),
+         ("Halüsinasyon koruması", "green"), ("Çok kiracılı izolasyon", "")],
+    ), unsafe_allow_html=True)
+    kpis = KpiSlot(tenant, ws)  # yeri burada; içeriği sorgular işlendikten sonra
+    st.write("")
+
+    t1, t2, t3 = st.tabs(["💬 Asistan", "📈 Analitik", "📚 Doküman Kütüphanesi"])
+    with t1:
+        tab_assistant(tenant, ws, departments, kpis)
+    kpis.render()
+    with t2:
+        tab_analytics(ws)
+    with t3:
+        tab_library(ws)
+
+
+main()

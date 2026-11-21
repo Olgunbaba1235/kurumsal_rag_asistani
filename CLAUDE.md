@@ -24,6 +24,8 @@ Kullanıcıyla Türkçe çalışılır.
 .\.venv\Scripts\activate
 npm install --prefix tests/pglite        # bir kez: testler için gömülü PostgreSQL (PGlite) + pgvector
 pytest                                    # API testleri PGlite üzerinde gerçek Postgres ile; tests/agent ve UI testleri sahte servislerle
+pip install -e .                          # bir kez: src/app/ui/rag_assistant paketlerini her dizinden import edilebilir yapar
+streamlit run app.py                      # vitrin arayüzü: kurulumsuz, bellek içi hibrit indeks + Canlı Demo Modu
 streamlit run ui/streamlit_app.py         # B2B arayüz (API'ye bağlı; tenant profilleri .streamlit/secrets.toml → [tenants.<id>])
 python scripts/quick_check.py --offline   # Chroma tabanlı çekirdeğin hızlı terminal doğrulaması
 python scripts/dev_pglite.py [--port 8010] [--no-seed]  # Docker'sız dev sunucu: PGlite + tek süreçli uvicorn --factory,
@@ -51,9 +53,34 @@ Doğrulanmamış / bilinen açıklar:
   hiç test edilmedi. Testler PGlite'ın PostgreSQL 18'i üzerinde; compose `pgvector/pgvector:pg16` kullanır.
 - **Gemini hiç çağrılmadı** (API anahtarı yok). Model adları (`gemini-2.5-flash`, `-flash-lite`,
   `gemini-embedding-001`) doğrulanmadı; `MIN_RELEVANCE=0.30` eşiği yalnızca çevrimdışı reranker ile kalibre edildi.
-- Kök dizindeki eski `app.py` hâlâ `src/rag_assistant/` paketini kullanıyor; yeni arayüz `ui/streamlit_app.py`.
-- Tam pytest paketi Faz 4 eklemelerinden sonra Windows .venv'inde çalıştırılıp toplam sayı doğrulanmadı;
-  `tests/agent/` (45 test) ayrı bir Python 3.13 ortamında geçti.
+- `app.py` = vitrin arayüzü: `src/local_engine.py` (bellek içi depo + `HybridRetriever` + `RAGEngine`; anahtar yoksa
+  `OfflineSummarizer` yalnızca bağlam cümlelerini atıfla aktarır), `ui/showcase_theme.py` (CSS, HTML kartlar — tüm
+  dinamik metin `html.escape`), `ui/showcase_charts.py` (Plotly; yoksa Vega-Lite yedeği). `rag_assistant` artık
+  yalnızca eski testlerde kullanılıyor. Testler: `tests/test_local_engine.py`, `tests/test_showcase_ui.py` (AppTest).
+- Araştırmacı + Denetçi: `src/auditor.py`. Araştırmacı = `RAGEngine` taslağı; Denetçi yanıtı yalnızca getirilen parçalarla
+  karşılaştırır (`approved`/`revised`/`rejected`/`skipped`). Anahtar varsa `GeminiAuditor` (fast=True, Flash) + kural
+  tabanlı sayısal güvenlik ağı; yoksa `RuleBasedAuditor` (örtüşme ≥%60, kaynakta olmayan sayı/tarih/oran ve alıntı
+  kontrolü). `LocalWorkspace.ask_audited`; arayüzde "Yüksek Doğruluk (Denetçi Modu)" anahtarı (varsayılan açık),
+  rozetler ve "Denetçi Kontrol Raporu". Testler: `tests/test_auditor.py`. Gemini denetçi yalnızca sahte LLM ile test edildi.
+- Vitrin akışı (`app.py`): soru gönderimleri callback ile `session_state.inbox`'a yazılır, `process_submission` yanıtı
+  **çizimden önce** sohbete ve `ws.history`'ye kaydeder (tam bir kez; rerun/kesilen çizim sayacı şişirmez). KPI satırı
+  `KpiSlot` ile sorgudan sonra çizilir. `LocalWorkspace.run()` → `Turn(response, audit, insight)`; `ask`/`ask_audited`
+  bunun ince sarmalayıcıları. `AnswerInsight`: en iyi alaka, eşik, alt sorular, filtre notu (+ filtre dışı ön kontrol).
+  Departman filtresi `dept_filter` anahtarlı, varsayılan boş; tenant değişince/demo başlayınca sıfırlanır.
+- Bileşik soru: `src/compound.py` (temkinli ayırma: bağlaçla ayırmak için iki tarafta da soru sözcüğü gerekir; tüm
+  soru reddedilirse `relaxed`). Önce yalnızca arama ile alt soru kapısı ölçülür; karşılığı olan alt sorular ayrı
+  yanıtlanıp ayrı denetlenir, olmayanlar için not eklenir. Kısaltma eşitleme `src/text_utils.ABBREVIATIONS`
+  (tokenize içinde; API tarafındaki BM25/HashingEmbedder'ı da etkiler — yalnızca dk/dak/sn/sa/km/kg/lt).
+- Denetçi kapsam notlarını ("…dokümanlarda yer almamaktadır", sayı içermiyorsa) iddia saymaz; düzeltilen yanıtta
+  paragraf/madde yapısı korunur. Testler: `tests/test_ux_fixes.py`.
+- Plotly grafikleri tarayıcıda Streamlit'in plotly.js'i ile görsel olarak kontrol edildi, ancak Python tarafında
+  gerçek plotly paketi yerine test amaçlı bir taklit kullanıldı (geliştirme ortamında plotly yoktu; kullanıcının
+  .venv'inde de kurulu değil → testler Vega-Lite yolunu çalıştırır, Plotly yolu `tests/test_ux_fixes.py`'de taklitle).
+- Yükleme alanının Türkçeleştirilmesi Streamlit 1.67 DOM'una (data-testid) dayalı CSS'tir; Streamlit sürümü
+  değişirse `ui/showcase_theme.uploader_css` gözden geçirilmeli.
+- Tam pytest paketi en son kullanıcının Windows .venv'inde 285 testle geçti (Denetçi katmanından sonra).
+  `tests/test_ux_fixes.py` (31 test) eklendikten sonra tam paket orada yeniden çalıştırılmadı; geliştirme
+  ortamında API (PGlite/asyncpg) testleri ve pyarrow isteyen `tests/test_ui_app.py` dışındaki tüm paket geçti.
 - `/agent/query` `MAX_QUESTION_CHARS` ayarını kontrol etmiyor (yalnızca şema sınırı 2000); orkestratör istisnası
   yakalanmıyor → middleware genel 500 döner (ayrıntı sızmaz, testli).
 - Arka plan ingestion süreç içi (BackgroundTasks); BM25 önbelleği worker başına.

@@ -134,9 +134,30 @@ pytest
 * `tests/api/` — REST API, tenant izolasyonu (API + servis + RLS), belge yaşam döngüsü, katı bağlam. Docker gerektirmez; Node.js yoksa otomatik atlanır.
 * `tests/test_*.py` — belge işleme, chunking, hibrit arama, RAG motoru (ağ gerektirmez).
 
-## 🖥️ Streamlit arayüzü (yerel / tek kullanıcılı mod)
+## 🖥️ Streamlit vitrin arayüzü (tek komut)
 
-`app.py` ChromaDB tabanlı yerel modu çalıştırır: `streamlit run app.py`.
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt   # bir kez (plotly dahil)
+pip install -e .                  # bir kez: src/app/ui/rag_assistant paketleri her dizinden import edilebilir
+streamlit run app.py              # http://localhost:8501
+```
+
+* Kurulum gerektirmez: örnek İK ve Finans dokümanları açılışta bellek içi hibrit indekse (vektör + BM25 + RRF)
+  yüklenir. Koyu tema, KPI kartları, Plotly grafikleri, sayfa düzeyinde kaynak kartları ve **Canlı Demo Modu** içerir.
+* `.env` dosyasında `GOOGLE_API_KEY` varsa yanıtları Gemini üretir; yoksa **çevrimdışı özetleyici** yalnızca
+  dokümandaki cümleleri kaynak atfıyla aktarır (yeni bilgi üretmez).
+* Her tarayıcı oturumu ve her tenant kendi indeksini kullanır; yüklenen belgeler kalıcı değildir.
+* Departman filtresi varsayılan olarak boştur (tüm departmanlar). Filtre yüzünden reddedilen soruda neden açıkça
+  yazılır, filtre dışındaki belgelerde ön kontrol yapılır ve tek tıkla filtresiz yeniden sorulabilir.
+* Bileşik sorular ("X nasıl hesaplanır ve Y nedir?") alt sorulara ayrılır: dokümanda karşılığı olan kısım kaynaklı
+  yanıtlanır, olmayan kısım için "dokümanlarda yer almamaktadır" notu düşülür. "dk"/"dakika", "sa"/"saat" gibi
+  kısaltmalar aramada eşdeğerdir.
+* Sorgu sayacı ve KPI'lar yalnızca gerçekten yanıtlanan sorulardan hesaplanır; rerun veya yarıda kesilen çizim
+  sayacı şişirmez. "Sohbeti temizle" ve demo yeniden başlatma oturum metriklerini de sıfırlar.
+* Vitrin modunda Streamlit'in Deploy butonu ve geliştirici menüsü gizlidir (`.streamlit/config.toml` →
+  `[client] toolbarMode = "minimal"`; geliştirirken `"auto"` yapılabilir).
+* REST API'ye bağlı çok kiracılı arayüz: `streamlit run ui/streamlit_app.py` (API: `uvicorn app.main:create_app --factory`).
 
 ## 🛣️ Yol haritası
 
