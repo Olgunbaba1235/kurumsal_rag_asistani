@@ -107,7 +107,7 @@ class GeminiEmbedder:
 
 
 class GeminiChatModel:
-    def __init__(self, api_key: str | None, model: str = "gemini-2.5-flash", temperature: float = 0.2):
+    def __init__(self, api_key: str | None, model: str = "gemini-3.5-flash", temperature: float = 0.2):
         self._client = _make_client(api_key)
         self.model = model
         self.temperature = temperature

@@ -43,8 +43,8 @@ class GeminiLLM:
     def __init__(
         self,
         api_key: str | None,
-        model: str = "gemini-2.5-flash",
-        fast_model: str = "gemini-2.5-flash-lite",
+        model: str = "gemini-3.5-flash",
+        fast_model: str = "gemini-3.5-flash-lite",
         temperature: float = 0.1,
     ):
         if not api_key:

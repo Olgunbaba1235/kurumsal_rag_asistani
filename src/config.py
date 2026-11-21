@@ -27,9 +27,9 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------ Google GenAI
     google_api_key: SecretStr | None = Field(default=None, alias="GOOGLE_API_KEY")
-    llm_model: str = Field(default="gemini-2.5-flash", alias="LLM_MODEL")
+    llm_model: str = Field(default="gemini-3.5-flash", alias="LLM_MODEL")
     # Sorgu yeniden yazma / reranking gibi hızlı yardımcı çağrılar için
-    fast_llm_model: str = Field(default="gemini-2.5-flash-lite", alias="FAST_LLM_MODEL")
+    fast_llm_model: str = Field(default="gemini-3.5-flash-lite", alias="FAST_LLM_MODEL")
     embedding_model: str = Field(default="gemini-embedding-001", alias="EMBEDDING_MODEL")
     embedding_dimension: int = Field(default=768, ge=128, le=3072, alias="EMBEDDING_DIMENSION")
     llm_temperature: float = Field(default=0.1, ge=0.0, le=2.0, alias="LLM_TEMPERATURE")
