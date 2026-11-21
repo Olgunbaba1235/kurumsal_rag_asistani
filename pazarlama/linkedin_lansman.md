@@ -2,7 +2,7 @@
 
 > Hedef kitle: KOBİ sahipleri, genel müdürler, İK / finans / operasyon yöneticileri.
 > Yayın önerisi: Salı–Perşembe, 08:30–10:00. Videoyu doğrudan LinkedIn'e yükleyin (link yerine yerel video daha çok erişim alır); demo linkini ilk yoruma koyun.
-> `[DEMO_LINK]` ve `[TEKLİF_LINK]` yer tutucularını yayından önce değiştirin.
+> Canlı demo: https://jxq2ypt97fhsweii9fwk9r.streamlit.app/ · `[TEKLİF_LINK]` yer tutucusunu (teklif sayfası/landing adresi) yayından önce doldurun.
 
 ---
 
@@ -40,13 +40,13 @@ Kurumsal RAG Asistanı yalnızca sizin dokümanlarınızdan yanıt veriyor, her 
 
 Dokümanda yoksa? "Yer almamaktadır" diyor. Bu kadar.
 
-Canlı demo (kurulum yok): [DEMO_LINK]
+Canlı demo (kurulum yok): https://jxq2ypt97fhsweii9fwk9r.streamlit.app/
 
 ---
 
 ## 3. İlk yorum (yayından hemen sonra)
 
-🎬 Canlı demo — tarayıcıda açılır, kurulum gerekmez: [DEMO_LINK]
+🎬 Canlı demo — tarayıcıda açılır, kurulum gerekmez: https://jxq2ypt97fhsweii9fwk9r.streamlit.app/
 Demo'da "▶ Başlat"a basın: 4 soruyu kaynaklı yanıtlıyor, 5. soruda (dokümanda olmayan bir bilgi) uydurmayı nasıl engellediğini görüyorsunuz.
 Şirketinize özel kurulum teklifi: [TEKLİF_LINK]
 
