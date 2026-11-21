@@ -24,6 +24,7 @@ Kullanıcıyla Türkçe çalışılır.
 .\.venv\Scripts\activate
 npm install --prefix tests/pglite        # bir kez: testler için gömülü PostgreSQL (PGlite) + pgvector
 pytest                                    # API testleri PGlite üzerinde gerçek Postgres ile; tests/agent ve UI testleri sahte servislerle
+pip install -r requirements-dev.txt       # tam ortam (requirements.txt = yalnızca Streamlit Cloud vitrini)
 pip install -e .                          # bir kez: src/app/ui/rag_assistant paketlerini her dizinden import edilebilir yapar
 streamlit run app.py                      # vitrin arayüzü: kurulumsuz, bellek içi hibrit indeks + Canlı Demo Modu
 streamlit run ui/streamlit_app.py         # B2B arayüz (API'ye bağlı; tenant profilleri .streamlit/secrets.toml → [tenants.<id>])
@@ -84,6 +85,9 @@ Doğrulanmamış / bilinen açıklar:
 - `/agent/query` `MAX_QUESTION_CHARS` ayarını kontrol etmiyor (yalnızca şema sınırı 2000); orkestratör istisnası
   yakalanmıyor → middleware genel 500 döner (ayrıntı sızmaz, testli).
 - Arka plan ingestion süreç içi (BackgroundTasks); BM25 önbelleği worker başına.
+- Streamlit Cloud: ana dosya `app.py`, yalnızca `requirements.txt` kurulur (sunucu paketi eklemeyin; testi
+  `tests/test_deployment.py`). `landing/index.html` statik tanıtım sayfası (CONFIG: demo URL + iletişim e-postası),
+  `pazarlama/` lansman metinleri.
 
 ## Sıradaki adım
 

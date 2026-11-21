@@ -1,12 +1,22 @@
-# Tam geliştirme ortamı: REST API + Streamlit arayüzü + testler
--r requirements-api.txt
+# Streamlit Community Cloud / vitrin arayüzü (app.py) çalışma zamanı bağımlılıkları.
+# Bulut yalnızca bu dosyayı kurar: sunucu tarafı paketler (FastAPI, asyncpg, redis, chromadb…) burada YOK.
+# Tam geliştirme ortamı (API + testler): pip install -r requirements-dev.txt
 
-# --- Streamlit arayüzü (yerel ChromaDB modu) ---
-streamlit>=1.50
-chromadb>=1.0
-python-dotenv>=1.0
-plotly>=5.20           # vitrin arayüzü grafikleri (app.py)
+streamlit>=1.50,<2
+plotly>=5.20
 
-# --- Test ---
-pytest>=8.0
-httpx>=0.27
+# --- RAG çekirdeği (src/) ---
+numpy>=1.26
+rank-bm25>=0.2.2
+langchain-text-splitters>=0.3
+pydantic>=2.7
+pydantic-settings>=2.3
+
+# --- Belge yükleme (PDF / DOCX / XLSX) ---
+pdfplumber>=0.11
+pypdf>=5.0
+python-docx>=1.1
+openpyxl>=3.1
+
+# --- Gemini (yalnızca GOOGLE_API_KEY secret'ı tanımlıysa kullanılır) ---
+google-genai>=1.20

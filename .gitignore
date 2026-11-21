@@ -23,6 +23,26 @@ data/chroma/*
 data/uploads/*
 !data/chroma/.gitkeep
 !data/uploads/.gitkeep
+# Yerel SQLite / vektör önbellekleri (Chroma, FAISS vb.)
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+chroma_db/
+.chroma/
+*.faiss
+*.index
+vector_cache/
+.cache/
+
+# --- Geçici dosyalar ---
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*~
+.pytest_tmp/
 
 # --- Loglar ---
 *.log

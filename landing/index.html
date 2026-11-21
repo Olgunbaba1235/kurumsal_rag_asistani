@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="tr" class="scroll-smooth">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Kurumsal RAG Asistanı · Sıfır Halüsinasyonlu Kurumsal Doküman Asistanı</title>
+  <meta name="description" content="Yönetmelik, prosedür ve sözleşmelerinizden kaynak göstererek yanıt veren, dokümanda olmayan bilgiyi asla uydurmayan kurumsal yapay zekâ asistanı." />
+  <meta property="og:title" content="Sıfır Halüsinasyonlu Kurumsal Doküman Asistanı" />
+  <meta property="og:description" content="Her yanıt doküman ve sayfa atfıyla gelir; Denetçi ajan her iddiayı kaynağa karşı doğrular." />
+  <meta property="og:type" content="website" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ["Inter", "Segoe UI", "system-ui", "sans-serif"] },
+          colors: {
+            ink: { 950: "#070B16", 900: "#0A0F1E", 800: "#111A2E", 700: "#1B2742" },
+            brand: { 300: "#A5B4FC", 400: "#8B92FF", 500: "#7C83FF", 600: "#5B61E8" },
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { background: radial-gradient(1200px 600px at 10% -10%, rgba(124,131,255,.18), transparent 60%),
+                        radial-gradient(900px 500px at 100% 10%, rgba(34,211,238,.10), transparent 60%), #0A0F1E; }
+    .glass { background: rgba(17,26,46,.72); border: 1px solid rgba(148,163,184,.14); backdrop-filter: blur(10px); }
+    .grad-text { background: linear-gradient(90deg,#A5B4FC,#22D3EE); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  </style>
+</head>
+<body class="font-sans text-slate-200 antialiased">
+
+  <!-- ================================================================ CONFIG
+       Yayına almadan önce yalnızca bu iki değeri güncelleyin. -->
+  <script>
+    window.CONFIG = {
+      DEMO_URL: "https://kurumsal-rag-asistani.streamlit.app",   // Streamlit Community Cloud canlı link
+      CONTACT_EMAIL: "iletisim@sirketiniz.com",                   // tekliflerin gideceği adres
+    };
+  </script>
+
+  <!-- ================================================================ NAV -->
+  <header class="sticky top-0 z-40 border-b border-white/5 bg-ink-900/80 backdrop-blur">
+    <nav class="mx-auto flex max-w-6xl items-center justify-between px-5 py-3.5">
+      <a href="#" class="flex items-center gap-2 font-bold text-white"><span class="text-xl">🧠</span> Kurumsal RAG Asistanı</a>
+      <div class="hidden items-center gap-7 text-sm text-slate-300 md:flex">
+        <a href="#ozellikler" class="hover:text-white">Özellikler</a>
+        <a href="#nasil" class="hover:text-white">Nasıl çalışır</a>
+        <a href="#sektorler" class="hover:text-white">Kimler için</a>
+        <a href="#sss" class="hover:text-white">SSS</a>
+      </div>
+      <div class="flex items-center gap-2">
+        <a data-demo-link href="#" target="_blank" rel="noopener" class="hidden rounded-xl border border-white/15 px-3.5 py-2 text-sm font-semibold text-white hover:bg-white/5 sm:inline-block">Canlı demo</a>
+        <a href="#teklif" class="rounded-xl bg-brand-500 px-3.5 py-2 text-sm font-semibold text-white shadow-lg shadow-brand-500/25 hover:bg-brand-600">Teklif alın</a>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ================================================================ HERO -->
+    <section class="mx-auto grid max-w-6xl items-center gap-12 px-5 pb-16 pt-14 md:pt-20 lg:grid-cols-2">
+      <div>
+        <span class="inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-300">
+          <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span> Kaynak atıflı · Denetçi onaylı yanıtlar
+        </span>
+        <h1 class="mt-5 text-4xl font-extrabold leading-tight tracking-tight text-white sm:text-5xl">
+          <span class="grad-text">Sıfır Halüsinasyonlu</span><br />Kurumsal Doküman Asistanı
+        </h1>
+        <p class="mt-5 max-w-xl text-lg leading-relaxed text-slate-300">
+          Yönetmeliklerinizi, prosedürlerinizi ve sözleşmelerinizi yükleyin; çalışanlarınız doğal dilde sorsun.
+          Her yanıt bilginin alındığı <b class="text-white">doküman ve sayfa</b> ile gelir. Dokümanda olmayan bilgi
+          uydurulmaz — asistan açıkça <i>“dokümanlarda yer almamaktadır”</i> der.
+        </p>
+        <div class="mt-8 flex flex-col gap-3 sm:flex-row">
+          <a data-demo-link href="#" target="_blank" rel="noopener"
+             class="inline-flex items-center justify-center gap-2 rounded-2xl bg-brand-500 px-6 py-3.5 font-semibold text-white shadow-xl shadow-brand-500/30 transition hover:-translate-y-0.5 hover:bg-brand-600">
+            ▶ Canlı Demoyu Başlat
+          </a>
+          <a href="#teklif" class="inline-flex items-center justify-center rounded-2xl border border-white/15 px-6 py-3.5 font-semibold text-white hover:bg-white/5">
+            Şirketinize özel teklif alın
+          </a>
+        </div>
+        <p class="mt-4 text-sm text-slate-400">Demo kurulum gerektirmez; örnek İK ve finans dokümanlarıyla tarayıcıda açılır.</p>
+      </div>
+
+      <!-- Ürün önizlemesi (temsili) -->
+      <div class="glass rounded-3xl p-5 shadow-2xl shadow-black/40" aria-label="Ürün arayüzü önizlemesi">
+        <div class="mb-4 flex items-center gap-1.5">
+          <span class="h-2.5 w-2.5 rounded-full bg-rose-400/70"></span><span class="h-2.5 w-2.5 rounded-full bg-amber-300/70"></span><span class="h-2.5 w-2.5 rounded-full bg-emerald-400/70"></span>
+          <span class="ml-3 text-xs text-slate-400">Asistan · Örnek Holding A.Ş.</span>
+        </div>
+        <div class="ml-auto w-fit max-w-[85%] rounded-2xl rounded-br-md bg-brand-500/20 px-4 py-2.5 text-sm text-white">Fazla mesai ücreti nasıl hesaplanır?</div>
+        <div class="mt-4 rounded-2xl border border-white/10 bg-ink-950/60 p-4">
+          <span class="inline-flex items-center rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-300">✓ Denetçi Onaylı</span>
+          <p class="mt-3 text-sm leading-relaxed text-slate-200">Fazla çalışma ücreti, normal saat ücretinin <b>%50 fazlası</b> ile ödenir.
+            <span class="whitespace-nowrap rounded-md bg-brand-500/15 px-1.5 text-xs text-brand-300">[İK İzin ve Çalışma Yönetmeliği]</span></p>
+          <div class="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+            <div class="rounded-xl bg-white/5 p-2"><div class="text-slate-400">Alaka</div><div class="font-bold text-white">%74</div></div>
+            <div class="rounded-xl bg-white/5 p-2"><div class="text-slate-400">Eşik</div><div class="font-bold text-white">%30</div></div>
+            <div class="rounded-xl bg-white/5 p-2"><div class="text-slate-400">İddia</div><div class="font-bold text-emerald-300">2/2 ✓</div></div>
+          </div>
+        </div>
+        <div class="mt-3 rounded-2xl border border-rose-400/25 bg-rose-400/5 p-3 text-sm">
+          <span class="text-xs font-semibold text-rose-300">✕ Kaynakta Bulunamadı — Uydurma Engellendi</span>
+          <p class="mt-1 text-slate-300">“Şirketin Mars'taki ofisinin adresi nedir?” → Yüklenen kurumsal dokümanlarda bu bilgi yer almamaktadır.</p>
+        </div>
+        <p class="mt-3 text-center text-[11px] text-slate-500">Temsili ekran; canlı demoda gerçek yanıtları görün.</p>
+      </div>
+    </section>
+
+    <!-- ================================================================ ÖZELLİKLER -->
+    <section id="ozellikler" class="mx-auto max-w-6xl scroll-mt-20 px-5 py-16">
+      <div class="max-w-2xl">
+        <p class="text-sm font-semibold uppercase tracking-widest text-brand-300">Güven için tasarlandı</p>
+        <h2 class="mt-2 text-3xl font-bold text-white sm:text-4xl">Yapay zekâya “emin misin?” diye sormanıza gerek yok</h2>
+        <p class="mt-4 text-slate-300">Genel amaçlı sohbet botları akıcı ama doğrulanamaz yanıtlar verir. Kurumsal RAG Asistanı yalnızca sizin dokümanlarınızdan yanıtlar ve her cümlenin kaynağını gösterir.</p>
+      </div>
+
+      <div class="mt-10 grid gap-5 md:grid-cols-2">
+        <article class="glass rounded-3xl p-6 md:row-span-2">
+          <div class="text-3xl">🛡️</div>
+          <h3 class="mt-3 text-xl font-bold text-white">Denetçi Kontrol Raporu</h3>
+          <p class="mt-2 text-slate-300">İki ajanlı mimari: <b class="text-white">Araştırmacı</b> yanıtı hazırlar, <b class="text-white">Denetçi</b> her iddiayı yalnızca getirilen kaynak parçalarıyla karşılaştırır.</p>
+          <ul class="mt-5 space-y-3 text-sm">
+            <li class="flex gap-3"><span class="text-emerald-300">✓</span><span><b class="text-white">Onaylandı</b> — tüm iddialar kaynakla destekleniyor.</span></li>
+            <li class="flex gap-3"><span class="text-amber-300">✎</span><span><b class="text-white">Düzeltildi</b> — kaynakta geçmeyen sayı, tarih, oran veya alıntı yanıttan çıkarıldı.</span></li>
+            <li class="flex gap-3"><span class="text-rose-300">✕</span><span><b class="text-white">Reddedildi</b> — dokümanda karşılığı yoksa yanıt üretilmez.</span></li>
+          </ul>
+          <p class="mt-5 rounded-2xl bg-white/5 p-4 text-sm text-slate-300">Raporda en iyi alaka skoru, eşik değeri, arama kapsamı ve iddia iddia kontrol sonucu açıkça görünür — denetim izi her yanıtla birlikte gösterilir.</p>
+        </article>
+        <article class="glass rounded-3xl p-6">
+          <div class="text-3xl">🏢</div>
+          <h3 class="mt-3 text-xl font-bold text-white">Departman Bazlı Arama</h3>
+          <p class="mt-2 text-slate-300">Dokümanları İK, Finans, Hukuk, Teknik gibi departmanlara ayırın; aramayı tek tıkla daraltın. Filtre yüzünden bir yanıt bulunamazsa asistan nedenini söyler ve bilginin hangi departmanda olduğunu gösterir.</p>
+        </article>
+        <article class="glass rounded-3xl p-6">
+          <div class="text-3xl">📎</div>
+          <h3 class="mt-3 text-xl font-bold text-white">Sayfa düzeyinde kaynak atfı</h3>
+          <p class="mt-2 text-slate-300">Her yanıtın altında doküman adı, sayfa numarası, alaka skoru ve alıntılanan bölüm yer alır. Tablolar dahil — çalışan tek tıkla doğrular.</p>
+        </article>
+      </div>
+
+      <div class="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="glass rounded-2xl p-5"><div class="font-semibold text-white">🔎 Hibrit arama</div><p class="mt-1 text-sm text-slate-400">Anlamsal vektör arama + BM25 anahtar kelime + yeniden sıralama.</p></div>
+        <div class="glass rounded-2xl p-5"><div class="font-semibold text-white">🧩 Bileşik sorular</div><p class="mt-1 text-sm text-slate-400">Sorunun bulunan kısmı kaynaklı yanıtlanır, bulunmayan kısım açıkça belirtilir.</p></div>
+        <div class="glass rounded-2xl p-5"><div class="font-semibold text-white">🔐 Çok kiracılı izolasyon</div><p class="mt-1 text-sm text-slate-400">Her şirketin verisi ayrı; veritabanı düzeyinde satır güvenliği (RLS).</p></div>
+        <div class="glass rounded-2xl p-5"><div class="font-semibold text-white">📄 PDF · DOCX · XLSX</div><p class="mt-1 text-sm text-slate-400">Mevcut dokümanlarınız dönüştürmeden yüklenir; tablolar korunur.</p></div>
+      </div>
+    </section>
+
+    <!-- ================================================================ NASIL ÇALIŞIR -->
+    <section id="nasil" class="scroll-mt-20 border-y border-white/5 bg-ink-950/40">
+      <div class="mx-auto max-w-6xl px-5 py-16">
+        <h2 class="text-3xl font-bold text-white">Üç adımda devreye alın</h2>
+        <ol class="mt-10 grid gap-6 md:grid-cols-3">
+          <li class="glass rounded-3xl p-6"><span class="text-sm font-bold text-brand-300">01</span><h3 class="mt-2 text-lg font-semibold text-white">Dokümanları yükleyin</h3><p class="mt-2 text-sm text-slate-300">Yönetmelik, prosedür, sözleşme ve politika dosyalarınızı departmanlarıyla birlikte yükleyin.</p></li>
+          <li class="glass rounded-3xl p-6"><span class="text-sm font-bold text-brand-300">02</span><h3 class="mt-2 text-lg font-semibold text-white">Çalışanlar sorsun</h3><p class="mt-2 text-sm text-slate-300">“İzin hakkım kaç gün?”, “Kaç teklif almam gerekir?” — günlük dilde, saniyeler içinde yanıt.</p></li>
+          <li class="glass rounded-3xl p-6"><span class="text-sm font-bold text-brand-300">03</span><h3 class="mt-2 text-lg font-semibold text-white">Kaynağıyla doğrulayın</h3><p class="mt-2 text-sm text-slate-300">Denetçi onayı, sayfa atfı ve alaka skoru ile her yanıt denetlenebilir kalır.</p></li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ================================================================ SEKTÖRLER -->
+    <section id="sektorler" class="mx-auto max-w-6xl scroll-mt-20 px-5 py-16">
+      <h2 class="text-3xl font-bold text-white">Kimler için?</h2>
+      <div class="mt-8 grid gap-5 md:grid-cols-3">
+        <div class="glass rounded-3xl p-6"><div class="text-2xl">⚖️</div><h3 class="mt-2 font-semibold text-white">Hukuk büroları</h3><p class="mt-2 text-sm text-slate-300">Sözleşme ve iç emsal arşivinde madde bazlı arama; her yanıt ilgili sayfaya bağlanır.</p></div>
+        <div class="glass rounded-3xl p-6"><div class="text-2xl">🧾</div><h3 class="mt-2 font-semibold text-white">Mali müşavirler</h3><p class="mt-2 text-sm text-slate-300">Müşteri bazlı ayrı çalışma alanları; prosedür ve sirküler sorularına kaynaklı yanıt.</p></div>
+        <div class="glass rounded-3xl p-6"><div class="text-2xl">🏭</div><h3 class="mt-2 font-semibold text-white">Orta ölçekli şirketler</h3><p class="mt-2 text-sm text-slate-300">İK, satın alma ve finans prosedürlerine 7/24 self-servis erişim; tekrar eden soruları azaltın.</p></div>
+      </div>
+    </section>
+
+    <!-- ================================================================ SSS -->
+    <section id="sss" class="mx-auto max-w-4xl scroll-mt-20 px-5 py-16">
+      <h2 class="text-3xl font-bold text-white">Sık sorulan sorular</h2>
+      <div class="mt-8 space-y-3">
+        <details class="glass group rounded-2xl p-5"><summary class="cursor-pointer list-none font-semibold text-white">“Sıfır halüsinasyon” ne anlama geliyor?</summary>
+          <p class="mt-3 text-sm text-slate-300">Asistan yalnızca yüklediğiniz dokümanlardan getirilen parçalarla yanıt verir. Alaka eşiğini geçen içerik yoksa model hiç çağrılmaz ve “dokümanlarda yer almamaktadır” yanıtı döner. Denetçi ajan ayrıca kaynakta geçmeyen sayı, tarih ve alıntıları yanıttan çıkarır.</p></details>
+        <details class="glass rounded-2xl p-5"><summary class="cursor-pointer list-none font-semibold text-white">Verilerimiz nerede tutuluyor?</summary>
+          <p class="mt-3 text-sm text-slate-300">Her şirket kendi izole çalışma alanında çalışır. Kurulum sizin altyapınızda (Docker) veya tercih ettiğiniz bulut ortamında yapılabilir; ayrıntıları teklif görüşmesinde birlikte netleştiririz.</p></details>
+        <details class="glass rounded-2xl p-5"><summary class="cursor-pointer list-none font-semibold text-white">Hangi dosya türleri destekleniyor?</summary>
+          <p class="mt-3 text-sm text-slate-300">PDF, Word (DOCX), Excel (XLSX), TXT ve Markdown. Tablolar parçalanmadan korunur.</p></details>
+        <details class="glass rounded-2xl p-5"><summary class="cursor-pointer list-none font-semibold text-white">Demo için ne gerekiyor?</summary>
+          <p class="mt-3 text-sm text-slate-300">Hiçbir şey. Canlı demo tarayıcıda örnek İK ve finans dokümanlarıyla açılır; kendi dosyanızı da yükleyip deneyebilirsiniz (demo verisi kalıcı değildir).</p></details>
+      </div>
+    </section>
+
+    <!-- ================================================================ TEKLİF -->
+    <section id="teklif" class="scroll-mt-20 px-5 pb-20">
+      <div class="glass mx-auto grid max-w-6xl gap-10 rounded-3xl p-6 sm:p-10 lg:grid-cols-5">
+        <div class="lg:col-span-2">
+          <h2 class="text-3xl font-bold text-white">Şirketinize Özel Kurulum Teklifi Alın</h2>
+          <p class="mt-4 text-slate-300">Doküman hacminizi ve kullanıcı sayınızı paylaşın; size uygun kurulum modelini ve fiyatlandırmayı içeren teklifi iletelim.</p>
+          <ul class="mt-6 space-y-2 text-sm text-slate-300">
+            <li>✓ Kendi dokümanlarınızla ücretsiz pilot görüşmesi</li>
+            <li>✓ Departman yapınıza göre yapılandırma</li>
+            <li>✓ Bulut veya şirket içi kurulum seçenekleri</li>
+          </ul>
+          <a data-demo-link href="#" target="_blank" rel="noopener" class="mt-8 inline-flex items-center gap-2 font-semibold text-brand-300 hover:text-brand-400">Önce canlı demoyu deneyin →</a>
+        </div>
+        <form id="quote-form" class="grid gap-4 sm:grid-cols-2 lg:col-span-3" novalidate>
+          <label class="text-sm"><span class="text-slate-300">Ad soyad *</span>
+            <input name="name" required autocomplete="name" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none focus:border-brand-400" /></label>
+          <label class="text-sm"><span class="text-slate-300">Şirket *</span>
+            <input name="company" required autocomplete="organization" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none focus:border-brand-400" /></label>
+          <label class="text-sm"><span class="text-slate-300">İş e-postası *</span>
+            <input name="email" type="email" required autocomplete="email" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none focus:border-brand-400" /></label>
+          <label class="text-sm"><span class="text-slate-300">Sektör</span>
+            <select name="sector" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none focus:border-brand-400">
+              <option>Hukuk bürosu</option><option>Mali müşavirlik</option><option>Üretim / sanayi</option><option>Hizmet / perakende</option><option>Diğer</option>
+            </select></label>
+          <label class="text-sm"><span class="text-slate-300">Çalışan sayısı</span>
+            <select name="size" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none focus:border-brand-400">
+              <option>1–20</option><option>21–100</option><option>101–500</option><option>500+</option>
+            </select></label>
+          <label class="text-sm"><span class="text-slate-300">Yaklaşık doküman sayısı</span>
+            <select name="docs" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none focus:border-brand-400">
+              <option>100'den az</option><option>100–1.000</option><option>1.000+</option>
+            </select></label>
+          <label class="text-sm sm:col-span-2"><span class="text-slate-300">Mesajınız</span>
+            <textarea name="message" rows="4" placeholder="Hangi dokümanlar, kaç kullanıcı, öncelikli kullanım senaryosu…" class="mt-1.5 w-full rounded-xl border border-white/10 bg-ink-950/70 px-3.5 py-2.5 text-white outline-none placeholder:text-slate-500 focus:border-brand-400"></textarea></label>
+          <div class="sm:col-span-2">
+            <button type="submit" class="w-full rounded-2xl bg-brand-500 px-6 py-3.5 font-semibold text-white shadow-xl shadow-brand-500/30 hover:bg-brand-600 sm:w-auto">Teklif talebini gönder</button>
+            <p id="form-status" class="mt-3 text-sm text-slate-400" role="status">Gönder'e bastığınızda e-posta uygulamanızda talebiniz hazır olarak açılır.</p>
+          </div>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <footer class="border-t border-white/5 py-8 text-center text-sm text-slate-500">
+    © <span id="year"></span> Kurumsal RAG Asistanı · Kaynak atıflı kurumsal bilgi platformu
+  </footer>
+
+  <script>
+    (function () {
+      const cfg = window.CONFIG;
+      document.querySelectorAll("[data-demo-link]").forEach((a) => (a.href = cfg.DEMO_URL));
+      document.getElementById("year").textContent = new Date().getFullYear();
+
+      const form = document.getElementById("quote-form");
+      const status = document.getElementById("form-status");
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const d = Object.fromEntries(new FormData(form).entries());
+        if (!d.name.trim() || !d.company.trim() || !form.email.checkValidity()) {
+          status.textContent = "Lütfen ad, şirket ve geçerli bir iş e-postası girin.";
+          status.className = "mt-3 text-sm text-rose-300";
+          return;
+        }
+        const body = [
+          `Ad soyad: ${d.name}`, `Şirket: ${d.company}`, `E-posta: ${d.email}`, `Sektör: ${d.sector}`,
+          `Çalışan sayısı: ${d.size}`, `Doküman sayısı: ${d.docs}`, "", d.message || "",
+        ].join("\n");
+        const subject = `Kurulum teklifi talebi — ${d.company}`;
+        window.location.href = `mailto:${cfg.CONTACT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        status.textContent = "E-posta uygulamanız açıldı; göndermeyi tamamlamanız yeterli. Açılmadıysa " + cfg.CONTACT_EMAIL + " adresine yazın.";
+        status.className = "mt-3 text-sm text-emerald-300";
+      });
+    })();
+  </script>
+</body>
+</html>

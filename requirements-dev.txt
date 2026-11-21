@@ -1,0 +1,11 @@
+# Tam geliştirme ortamı: REST API + Streamlit arayüzleri + testler
+-r requirements-api.txt
+-r requirements.txt
+
+# --- Eski Streamlit arayüzü / quick_check (yerel ChromaDB modu) ---
+chromadb>=1.0
+python-dotenv>=1.0
+
+# --- Test ---
+pytest>=8.0
+httpx>=0.27

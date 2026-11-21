@@ -84,7 +84,7 @@ Swagger UI: **http://localhost:8000/docs**
 
 ```bash
 python -m venv .venv && .venv\Scripts\activate      # macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt               # API + arayüz + testler
 alembic upgrade head                                  # DATABASE_MIGRATION_URL ile
 uvicorn app.main:create_app --factory --reload
 ```
@@ -138,7 +138,7 @@ pytest
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt   # bir kez (plotly dahil)
+pip install -r requirements-dev.txt   # bir kez (tam ortam; yalnızca vitrin için requirements.txt yeter)
 pip install -e .                  # bir kez: src/app/ui/rag_assistant paketleri her dizinden import edilebilir
 streamlit run app.py              # http://localhost:8501
 ```
@@ -158,6 +158,20 @@ streamlit run app.py              # http://localhost:8501
 * Vitrin modunda Streamlit'in Deploy butonu ve geliştirici menüsü gizlidir (`.streamlit/config.toml` →
   `[client] toolbarMode = "minimal"`; geliştirirken `"auto"` yapılabilir).
 * REST API'ye bağlı çok kiracılı arayüz: `streamlit run ui/streamlit_app.py` (API: `uvicorn app.main:create_app --factory`).
+
+## ☁️ Streamlit Community Cloud'a dağıtım
+
+1. [share.streamlit.io](https://share.streamlit.io) → **Create app** → repo `Olgunbaba1235/kurumsal_rag_asistani`,
+   branch `main`, **Main file path: `app.py`** (başka bir dosya veya başka bir repo seçiliyse o uygulamanın
+   kodu çalışır — örn. bu repoda olmayan bir CSV'yi arayan `FileNotFoundError` bu yüzden görülür).
+2. *Advanced settings* → Python 3.12. İsteğe bağlı **Secrets**: `GOOGLE_API_KEY = "..."` (yoksa çevrimdışı
+   özetleyici çalışır). Kök düzeydeki secret'lar ortam değişkeni olarak okunur; `.env` gerekmez.
+3. Bulut yalnızca hafif `requirements.txt`'i kurar (sunucu paketleri `requirements-dev.txt`'tedir). Veri yolları
+   proje köküne sabitlenmiştir; uygulama hangi çalışma dizininden başlatılırsa başlatılsın örnek belgeleri bulur
+   (`tests/test_deployment.py`).
+
+Tanıtım sayfası: `landing/index.html` (statik; GitHub Pages / Netlify'a doğrudan konabilir). Canlı demo ve iletişim
+adresi dosyanın başındaki `CONFIG` bloğundan ayarlanır. Pazarlama metinleri: `pazarlama/`.
 
 ## 🛣️ Yol haritası
 
