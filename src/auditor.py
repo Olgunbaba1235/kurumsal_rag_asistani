@@ -78,6 +78,31 @@ def _strip_labels(text: str) -> str:
     return _LABEL_RE.sub("", text).strip(" -•*\t")
 
 
+_MD_MARK_RE = re.compile(r"\*\*|__|`|^#{1,6}\s*")
+_SPACE_PUNCT_RE = re.compile(r"\s+([.,;:!?])")
+
+
+def display_text(claim: str) -> str:
+    """Rapor için okunur iddia metni: atıf etiketleri, Markdown işaretleri ve noktalama öncesi boşluk temizlenir."""
+    text = _MD_MARK_RE.sub("", _strip_labels(claim))
+    text = _SPACE_PUNCT_RE.sub(r"\1", " ".join(text.split()))
+    return text.strip(" -•*:") or text
+
+
+_BOLD_ONLY_RE = re.compile(r"^\*\*[^*]+\*\*:?$")
+
+
+def _is_heading(claim: str) -> bool:
+    """Markdown başlığı ("### Hibrit Model") veya yalnızca kalın kısa satır ("**Ekipman**") iddia değildir.
+
+    Sayı içeren ya da cümle gibi biten satırlar başlık sayılmaz; böylece başlık kılığında bir iddia kaçamaz.
+    """
+    body = _LABEL_RE.sub("", claim).strip()
+    if numbers_in(body) or body.rstrip("*").endswith((".", "!", "?")):
+        return False
+    return body.startswith("#") or (bool(_BOLD_ONLY_RE.match(body)) and len(body.split()) <= 8)
+
+
 def _is_scope_note(body: str) -> bool:
     """"…yüklenen dokümanlarda yer almamaktadır." gibi kapsam notları bilgi iddiası değildir.
 
@@ -91,7 +116,7 @@ def _is_scope_note(body: str) -> bool:
 def _is_connective(claim: str) -> bool:
     """Bilgi taşımayan bağlaç satırları ("…şöyledir:") ve kapsam notları denetlenmez."""
     body = _strip_labels(claim)
-    if _is_scope_note(body):
+    if _is_scope_note(body) or _is_heading(claim):
         return True
     return not numbers_in(body) and (body.endswith(":") or len(tokenize(body)) < 3)
 
@@ -106,20 +131,21 @@ class RuleBasedAuditor:
 
     def check_claim(self, claim: str, sources: Sequence[str]) -> ClaimCheck:
         body = _strip_labels(claim)
+        shown = display_text(claim)
         source_text = "\n".join(sources)
         missing = sorted(numbers_in(body) - numbers_in(source_text))
         if missing:
-            return ClaimCheck(body, False, f"Kaynakta geçmeyen sayı/tarih/oran: {', '.join(missing)}", 0.0)
+            return ClaimCheck(shown, False, f"Kaynakta geçmeyen sayı/tarih/oran: {', '.join(missing)}", 0.0)
         for q in _QUOTE_RE.findall(body):
             if q.strip().lower() not in source_text.lower():
-                return ClaimCheck(body, False, f"Alıntı kaynakta birebir yok: “{q[:60]}”", 0.0)
+                return ClaimCheck(shown, False, f"Alıntı kaynakta birebir yok: “{q[:60]}”", 0.0)
         claim_tokens = set(tokenize(body))
         if not claim_tokens:
-            return ClaimCheck(body, True, "Bilgi içermeyen ifade", 1.0)
+            return ClaimCheck(shown, True, "Bilgi içermeyen ifade", 1.0)
         overlap = len(claim_tokens & set(tokenize(source_text))) / len(claim_tokens)
         if overlap < self.min_overlap:
-            return ClaimCheck(body, False, f"Kaynakla örtüşme düşük (%{overlap * 100:.0f})", overlap)
-        return ClaimCheck(body, True, f"Kaynakla örtüşme %{overlap * 100:.0f}", overlap)
+            return ClaimCheck(shown, False, f"Kaynakla örtüşme düşük (%{overlap * 100:.0f})", overlap)
+        return ClaimCheck(shown, True, f"Kaynakla örtüşme %{overlap * 100:.0f}", overlap)
 
     def _sources_for(self, claim: str, response: RAGResponse) -> list[str]:
         labels = set(_LABEL_RE.findall(claim))

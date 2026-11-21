@@ -282,7 +282,7 @@ def test_demo_from_empty_tenant_switches_to_sample(app_test):
     at.sidebar.selectbox[0].set_value(EMPTY).run()
     next(b for b in at.button if b.label.startswith("▶")).click().run()
     assert not at.exception, at.exception
-    assert at.session_state["tenant"] == SAMPLE and len(at.session_state["chats"][SAMPLE]) == 10
+    assert at.session_state["tenant"] == SAMPLE and len(at.session_state["chats"][SAMPLE]) == 12
     assert at.session_state["chats"].get(EMPTY, []) == []
 
 
@@ -305,7 +305,7 @@ def test_full_tenant_flows_do_not_crash(app_test):
     assert len(at.session_state["chats"][SAMPLE]) == 4
     # Analitik ve Doküman Kütüphanesi sekmeleri aynı çalıştırmada çizilir
     assert any("Doküman Kütüphanesi" in t.label for t in at.tabs)
-    assert len([b for b in at.button if b.key and b.key.startswith("del_")]) == 2
+    assert len([b for b in at.button if b.key and b.key.startswith("del_")]) == 3
     next(b for b in at.button if b.label.startswith("🧹")).click().run()
     assert not at.exception and at.session_state["chats"][SAMPLE] == []
 

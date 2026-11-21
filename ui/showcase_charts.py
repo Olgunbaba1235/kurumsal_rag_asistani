@@ -89,7 +89,7 @@ def quality_points(history: Sequence[Any]) -> list[dict[str, Any]]:
 
 # ------------------------------------------------------------------ Plotly figürleri
 def usage_figure(rows: list[dict[str, Any]], session_queries: int = 0):  # noqa: ANN201
-    title = "Günlük sorgu hacmi — örnek veri" + (f" · bu oturum: {session_queries}" if session_queries else "")
+    title = "🧪 SİMÜLE VERİ · günlük sorgu hacmi" + (f" · gerçek oturum: {session_queries}" if session_queries else "")
     if not PLOTLY:
         return _vl_line(rows, title)
     labels = [tr_day_label(r["date"]) for r in rows]
@@ -112,6 +112,11 @@ def usage_figure(rows: list[dict[str, Any]], session_queries: int = 0):  # noqa:
     layout["xaxis"] = {**layout["xaxis"], "type": "category", "tickmode": "array", "tickvals": ticks,
                        "ticktext": ticks, "tickangle": 0}
     layout["yaxis"] = {**layout["yaxis"], "title": {"text": "Sorgu", "standoff": 10}}
+    # Filigran: ekran görüntüsü alınsa bile verinin simüle olduğu anlaşılsın
+    layout["annotations"] = [{
+        "text": "SİMÜLE VERİ", "xref": "paper", "yref": "paper", "x": 0.5, "y": 0.5, "showarrow": False,
+        "font": {"size": 46, "color": "rgba(251,191,36,0.16)"}, "textangle": -14,
+    }]
     fig.update_layout(**layout)
     return fig
 
@@ -137,7 +142,7 @@ def department_figure(counts: dict[str, int]):  # noqa: ANN201
 
 
 def quality_figure(points: list[dict[str, Any]]):  # noqa: ANN201
-    title = "Bu oturumdaki sorgular: güven skoru ve yanıt süresi"
+    title = "✅ Gerçek veri · Bu oturumdaki sorgular: güven skoru ve yanıt süresi"
     if not PLOTLY:
         return _vl_scatter(points, title)
     fig = go.Figure(go.Scatter(

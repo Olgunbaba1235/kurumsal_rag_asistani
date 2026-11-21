@@ -27,7 +27,7 @@ def make_ws() -> LocalWorkspace:
 @pytest.fixture(scope="module")
 def ws() -> LocalWorkspace:
     w = make_ws()
-    assert w.load_sample_documents() == 2
+    assert w.load_sample_documents() == 3  # İK + Finans (md) + Hukuk sözleşmesi (pdf)
     return w
 
 
@@ -38,6 +38,7 @@ def norm(text: str) -> str:
 def test_sample_documents_are_indexed_with_departments(ws):
     docs = {d.filename: d for d in ws.documents}
     assert docs["IK_Izin_ve_Calisma_Yonetmeligi.md"].department == "İnsan Kaynakları"
+    assert docs["Hukuk_Hizmet_Sozlesmesi.pdf"].department == "Hukuk"
     assert docs["Finans_Harcama_Proseduru.md"].department == "Finans"
     assert ws.store.chunk_count == sum(d.chunk_count for d in docs.values()) > 0
     assert ws.mode == OFFLINE_MODE

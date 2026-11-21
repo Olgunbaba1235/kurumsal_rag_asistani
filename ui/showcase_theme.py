@@ -148,6 +148,39 @@ CSS = """
 }
 .callout .probe { color: #CBD5E1; font-size: 0.8rem; margin-top: 4px; }
 .part-row { font-size: 0.82rem; color: #CBD5E1; margin: 3px 0; }
+
+/* --- Yanıt altı: rozet + güven + meta tek satırda; numaralı kaynaklar --- */
+.answer-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.answer-foot .audit-badge { margin: 0; }
+.answer-foot .meta { margin-top: 0; }
+.conf { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; font-size: 0.78rem;
+  font-weight: 650; border: 1px solid; }
+.conf.high { color: #6EE7B7; background: rgba(16,185,129,.12); border-color: rgba(16,185,129,.45); }
+.conf.mid { color: #FDE68A; background: rgba(251,191,36,.10); border-color: rgba(251,191,36,.40); }
+.conf.low { color: #FCA5A5; background: rgba(244,63,94,.10); border-color: rgba(244,63,94,.40); }
+.cite .head .cite-num { color: #0B1222; background: #A5B4FC; border-radius: 8px; padding: 1px 7px;
+  font-weight: 800; font-size: 0.78rem; }
+.sim-banner { border-radius: 12px; padding: 10px 14px; margin: 4px 0 10px 0; font-size: 0.84rem; line-height: 1.45;
+  color: #FDE68A; background: repeating-linear-gradient(135deg, rgba(251,191,36,.10) 0 12px, rgba(251,191,36,.05) 12px 24px);
+  border: 1px dashed rgba(251,191,36,.6); }
+
+/* --- Mobil: kenar çubuğu kapalı başlar; KPI'lar yatay kaydırmalı şerit; hero kısalır --- */
+@media (max-width: 640px) {
+  .hero { padding: 16px 18px; }
+  .hero h1 { font-size: 1.35rem; }
+  .hero p, .hero .badge { display: none; }
+  [data-testid="stHorizontalBlock"]:has(.kpi) {
+    flex-wrap: nowrap !important; overflow-x: auto; gap: 0.6rem; padding-bottom: 4px; scroll-snap-type: x mandatory;
+  }
+  [data-testid="stHorizontalBlock"]:has(.kpi) > [data-testid="stColumn"] {
+    flex: 0 0 152px !important; min-width: 152px !important; width: 152px !important; scroll-snap-align: start;
+  }
+  .kpi { height: 124px; padding: 12px 14px; }
+  .kpi .sub { -webkit-line-clamp: 1; }
+  .kpi .value { font-size: 1.3rem; }
+  .kpi .value.small { font-size: 1rem; }
+  [class*="st-key-sample_"] button { min-height: 44px; }
+}
 .part-row .ok { color: #6EE7B7; } .part-row .bad { color: #FCA5A5; }
 
 /* --- Sohbet --- */
@@ -299,13 +332,14 @@ def evidence_html(text: str, max_chars: int = 1400) -> str:
 
 
 def citation_card(label: str, source: str, page: int | None, department: str, relevance: float,
-                  evidence: str, max_chars: int = 1400) -> str:
-    """Kaynak kartı: başlık satırı, alaka çubuğu, parça önizlemesi ve (ayrı kapta) atıf etiketi."""
+                  evidence: str, max_chars: int = 1400, *, number: int | None = None) -> str:
+    """Kaynak kartı: [n] numarası, başlık satırı, alaka çubuğu, parça önizlemesi ve (ayrı kapta) atıf etiketi."""
     rel = max(0.0, min(100.0, float(relevance)))
     page_pill = f'<span class="pill page">Sayfa {esc(page)}</span>' if page else ""
+    num = f'<span class="cite-num">[{int(number)}]</span>' if number else ""
     return (
         '<div class="glass cite">'
-        f'<div class="head"><span class="file">📄 {esc(source)}</span>{page_pill}'
+        f'<div class="head">{num}<span class="file">📄 {esc(source)}</span>{page_pill}'
         f'<span class="pill">{esc(department or "Genel")}</span>'
         f'<span class="pill">Alaka %{rel:.0f}</span></div>'
         f'<div class="bar"><span style="width:{rel:.0f}%"></span></div>'
@@ -410,4 +444,18 @@ def service_error_card(message: str) -> str:
         '<div class="callout"><b>⚠️ Yanıt şu anda üretilemedi</b>'
         f'<div class="probe">{esc(message)}</div></div>'
     )
+
+
+def confidence_pill(value: int, level: str) -> str:
+    """Kalibre güven skoru: "Yüksek güvenilirlik · %92" (seviye rengiyle)."""
+    cls = "high" if value >= 85 else "mid" if value >= 65 else "low"
+    label = f"{esc(level)} · %{int(value)}" if level else f"Güven %{int(value)}"
+    return f'<span class="conf {cls}" title="Kanıt gücü + atıf kapsamı + Denetçi doğrulaması">{label}</span>'
+
+
+SIMULATED_BANNER = (
+    '<div class="sim-banner"><b>🧪 DEMO ORTAMI · SİMÜLE VERİ</b> — Bu grafik gerçek müşteri kullanımı değildir; '
+    "ürünün raporlama görünümünü göstermek için üretilmiş örnek veridir. Bu oturumda sorduğunuz sorular ayrıca "
+    "işaretlenir; alttaki grafik yalnızca gerçek oturum sorgularını gösterir.</div>"
+)
 

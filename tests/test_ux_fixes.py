@@ -183,9 +183,9 @@ def test_demo_restart_and_clear_reset_session_metrics(app_test):
     at = app_test
     start = next(b for b in at.button if b.label.startswith("▶"))
     start.click().run()
-    assert session_count(at) == 5 and len(chats(at)) == 10
+    assert session_count(at) == 6 and len(chats(at)) == 12
     next(b for b in at.button if b.label.startswith("▶")).click().run()
-    assert session_count(at) == 5 and len(chats(at)) == 10  # 10 değil: demo yeniden başladı
+    assert session_count(at) == 6 and len(chats(at)) == 12  # 24 değil: demo yeniden başladı
     next(b for b in at.button if b.label.startswith("🧹")).click().run()
     assert session_count(at) == 0 and chats(at) == []
 
@@ -198,7 +198,7 @@ def test_report_has_no_duplicate_badge_and_merges_notes(app_test):
     page = html(at)
     assert page.count("✕ Kaynakta Bulunamadı — Uydurma Engellendi") == 1  # yalnızca yanıtın üstünde
     reports = [e for e in at.expander if e.label == "🛡️ Denetçi Kontrol Raporu"]
-    assert len(reports) == 5
+    assert len(reports) == 6
     for report in reports:
         inner = " ".join(m.value for m in report.markdown)
         assert 'class="audit-badge' not in inner

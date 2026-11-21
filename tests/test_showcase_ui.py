@@ -97,8 +97,8 @@ def test_live_demo_mode_runs_full_script(app_test):
     next(b for b in at.button if b.label.startswith("▶")).click().run()
     assert not at.exception, at.exception
     msgs = at.session_state["chats"][SAMPLE]
-    assert len(msgs) == 10 and at.session_state["demo_queue"] == []
-    assert all(m["response"].is_answered for m in msgs[1:8:2])
+    assert len(msgs) == 12 and at.session_state["demo_queue"] == []
+    assert all(m["response"].is_answered for m in msgs[1:10:2])  # 4 politika sorusu + sözleşme PDF
     assert not msgs[-1]["response"].is_answered  # kapsam dışı soru: uydurma yok
 
 
@@ -117,7 +117,7 @@ def test_tenants_are_isolated_in_ui(app_test):
 def test_library_lists_and_removes_documents(app_test):
     at = app_test
     delete = [b for b in at.button if b.key and b.key.startswith("del_")]
-    assert len(delete) == 2
+    assert len(delete) == 3
     delete[0].click().run()
     assert not at.exception, at.exception
-    assert len([b for b in at.button if b.key and b.key.startswith("del_")]) == 1
+    assert len([b for b in at.button if b.key and b.key.startswith("del_")]) == 2

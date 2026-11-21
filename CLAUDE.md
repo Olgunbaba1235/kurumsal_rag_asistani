@@ -92,6 +92,15 @@ Doğrulanmamış / bilinen açıklar:
 - Sıcak yenileme: `src/` içinde fonksiyon içinden `from src…` yapmayın (Streamlit modülleri boşaltırken
   `KeyError: 'src'`); `app.py` yarım/yabancı `src` modüllerini temizleyip yeniden yükler, eski sınıftan kalan
   çalışma alanını yeniden kurar. Atıf eşleştirme önce uzantılı tam adla yapılır (tr.pdf ≠ tr.docx).
+- Akışlı yanıt: `LocalWorkspace.start()` → `PendingTurn` (`tokens` ekrana akar, `finish()` Denetçi + tek seferlik
+  kayıt); `run()` = `start().finish()`. Bileşik/kurtarma/red yolları tek parça verir. Arayüz akışı `st.empty()`
+  yuvasına yazar, Denetçi sonrası nihai metni aynı yuvaya koyar; rozet + güven + kaynaklar altta.
+- Güven: `calibrated_confidence` (kanıt 0.35 + atıf kapsamı 0.25 + Denetçi doğrulaması 0.40, en çok %97) →
+  `AnswerInsight.confidence/confidence_level`; KPI ortalaması bunu kullanır. `RAGResponse.confidence` ham kalır.
+- Atıflar ekranda `ui/citations.number_citations` ile `[1]`, `[2]`; saklanan metin etiketli kalır (doğrulama için).
+- Vitrin `Hukuk` departmanını ekler (yalnızca `LocalWorkspace`; API varsayılanları değişmedi). Örnek sözleşme PDF'i
+  `scripts/make_sample_contract.py` ile üretilir; örnek belgeler `app._cached_samples` ile sunucu başına önbellekli.
+  Demo senaryosu 6 soru (4 politika + sözleşme + Mars). `.github/workflows/keep-alive.yml` demoyu uyanık tutar.
 - Streamlit Cloud: ana dosya `app.py`, yalnızca `requirements.txt` kurulur (sunucu paketi eklemeyin; testi
   `tests/test_deployment.py`). `landing/index.html` statik tanıtım sayfası (CONFIG: demo URL + iletişim e-postası),
   `pazarlama/` lansman metinleri.

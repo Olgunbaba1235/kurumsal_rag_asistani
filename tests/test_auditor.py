@@ -182,12 +182,12 @@ def test_demo_shows_approved_badges_and_rejection_badge(app_test):
     assert not at.exception, at.exception
     msgs = at.session_state["chats"][SAMPLE]
     statuses = [m["audit"].status for m in msgs if m["role"] == "assistant"]
-    assert statuses == ["approved"] * 4 + ["rejected"]
+    assert statuses == ["approved"] * 5 + ["rejected"]  # 4 politika + sözleşme PDF, Mars reddi
     page = html(at)
     assert page.count("✓ Denetçi Onaylı") >= 4
     assert "✕ Kaynakta Bulunamadı — Uydurma Engellendi" in page
     reports = [e for e in at.expander if e.label == "🛡️ Denetçi Kontrol Raporu"]
-    assert len(reports) == 5
+    assert len(reports) == 6
     assert any("Denetim süresi" in c.value for c in at.caption)
 
 

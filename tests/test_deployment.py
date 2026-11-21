@@ -75,7 +75,7 @@ def test_bundled_data_files_exist():
 
     sample_dir = Settings(_env_file=None).sample_docs_dir
     assert sample_dir.is_absolute() and sample_dir.is_relative_to(ROOT)
-    assert sorted(p.suffix for p in sample_dir.iterdir()) == [".md", ".md"]
+    assert sorted(p.suffix for p in sample_dir.iterdir()) == [".md", ".md", ".pdf"]
 
 
 def test_app_runs_from_any_working_directory(tmp_path, monkeypatch):
@@ -95,7 +95,7 @@ def test_app_runs_from_any_working_directory(tmp_path, monkeypatch):
     assert not at.exception, at.exception
     assert os.getcwd() == str(tmp_path)
     ws = next(iter(at.session_state["workspaces"].values()))
-    assert len(ws.documents) == 2
+    assert len(ws.documents) == 3
     next(b for b in at.button if b.label.startswith("▶")).click().run()
     assert not at.exception, at.exception
-    assert len(next(iter(at.session_state["chats"].values()))) == 10
+    assert len(next(iter(at.session_state["chats"].values()))) == 12

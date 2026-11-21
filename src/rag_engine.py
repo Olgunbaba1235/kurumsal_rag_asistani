@@ -396,6 +396,11 @@ class StreamingAnswer:
     def retrieved(self) -> list[RetrievedChunk]:
         return self._ctx["chunks"]
 
+    @property
+    def will_generate(self) -> bool:
+        """Alaka kapısı geçildi ve model yanıt üretecek mi (False → anında red/bilgi yok yanıtı)."""
+        return self._tokens is not None
+
     def __iter__(self) -> Iterator[str]:
         if self._tokens is None:
             yield NO_INFO_ANSWER

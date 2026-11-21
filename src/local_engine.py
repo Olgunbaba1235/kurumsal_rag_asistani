@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -31,13 +31,14 @@ from src.document_loader import ProcessedDocument, process_document
 from src.embeddings import HashingEmbedder
 from src.hybrid_retriever import HybridRetriever, LexicalReranker
 from src.llm import GeminiLLM, LLMError, Message
-from src.rag_engine import RAGEngine, RAGResponse, rewrite_query
+from src.rag_engine import RAGEngine, RAGResponse, citation_coverage, rewrite_query
 from src.search_types import SearchResult
 from src.text_utils import fold, tokenize
 
 logger = logging.getLogger(__name__)
 
 OFFLINE_MODE = "Çevrimdışı özetleyici"
+SHOWCASE_DEPARTMENTS = ("Hukuk",)
 GEMINI_MODE = "Gemini"
 
 
@@ -120,6 +121,9 @@ _QUESTION_RE = re.compile(r"\nSORU: (.+?)(?:\n|$)")
 _SENT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 
 
+_TITLE_RE = re.compile(r"^(?:Madde|Bölüm|Kısım|Ek)\s+\d+[\w.]*\s*[–—:-]", re.IGNORECASE)
+
+
 class OfflineSummarizer:
     """API anahtarı olmadan çalışan, yalnızca bağlamdan cümle seçen yanıtlayıcı.
 
@@ -151,6 +155,9 @@ class OfflineSummarizer:
                 clean = self._clean(sent).rstrip(":").strip()
                 if len(clean) < 25 or (len(clean.split()) < 6 and not clean.startswith("|")):
                     continue  # başlık/kısa parça
+                letters = [ch for ch in clean if ch.isalpha()]
+                if _TITLE_RE.match(clean) or (letters and sum(ch.isupper() for ch in letters) > 0.8 * len(letters)):
+                    continue  # "Madde 5 – Hizmet Kredisi ve Cezai Şart" gibi madde/bölüm başlıkları
                 if clean.startswith("|"):  # tablo satırı: okunur hale getir
                     cells = [c.strip() for c in clean.strip("|").split("|") if c.strip() and set(c.strip()) != {"-"}]
                     if not cells or not any(ch.isdigit() for ch in clean):
@@ -209,10 +216,42 @@ class AnswerInsight:
     outside_departments: list[str] = field(default_factory=list)
     parts: list[PartOutcome] = field(default_factory=list)
     empty_index: bool = False  # tenant'ın bilgi tabanında hiç belge yok
+    confidence: int = 0  # kullanıcıya gösterilen, Denetçi kararını da içeren güven skoru (%)
+    confidence_level: str = ""  # "Yüksek güvenilirlik" / "Orta güvenilirlik" / "Düşük güvenilirlik" / "Bilgi yok"
 
     @property
     def missing_parts(self) -> list[PartOutcome]:
         return [p for p in self.parts if not p.answered]
+
+
+STRONG_RELEVANCE = 0.60  # bu alaka skoruna ulaşan kanıt "tam güçlü" sayılır
+VERIFICATION_WEIGHT = {"approved": 1.0, "revised": 0.6, "skipped": 0.55}
+
+
+def calibrated_confidence(response: RAGResponse, audit: AuditResult,
+                          parts: Sequence[PartOutcome] = ()) -> tuple[int, str]:
+    """Kullanıcıya gösterilen güven skoru (%) ve seviyesi.
+
+    Araştırmacının ham skoru yalnızca arama/atıf sinyallerine bakar ve Gemini'nin kısa, her cümlesi atıflı
+    yanıtlarında yapay olarak düşük kalır (%50 civarı). Burada Denetçi kararı da hesaba katılır:
+
+    * kanıt gücü  (0.35): atıf yapılan en alakalı parçanın skoru / 0.60 (üstü tam puan)
+    * atıf kapsamı (0.25): olgusal cümlelerin atıflı oranı
+    * doğrulama    (0.40): Denetçi onayı 1.0 · düzeltme 0.6 · denetlenmedi 0.55
+
+    Bileşik soruda yanıtlanmayan alt soru oranı kadar düşürülür; skor hiçbir zaman %97'yi aşmaz.
+    """
+    if response.error or not response.is_answered or audit.status == "rejected":
+        return 0, "Bilgi yok"
+    cited = [e for e in response.evidence if e.cited] or response.evidence
+    evidence = min(1.0, max((e.relevance for e in cited), default=0.0) / 100 / STRONG_RELEVANCE)
+    coverage = citation_coverage(audit.answer if audit.status != "skipped" else response.answer)
+    score = 0.35 * evidence + 0.25 * coverage + 0.40 * VERIFICATION_WEIGHT.get(audit.status, 0.55)
+    if parts:
+        score *= 0.6 + 0.4 * sum(p.answered for p in parts) / len(parts)
+    value = round(min(0.97, score) * 100)
+    level = "Yüksek güvenilirlik" if value >= 85 else "Orta güvenilirlik" if value >= 65 else "Düşük güvenilirlik"
+    return value, level
 
 
 @dataclass(slots=True)
@@ -224,11 +263,32 @@ class Turn:
     insight: AnswerInsight
 
 
+class PendingTurn:
+    """Akışlı yanıt: önce `tokens` tüketilir (ekrana akar), sonra `finish()` Denetçi'yi çalıştırıp `Turn` döner.
+
+    `finish()` oturum geçmişine tam bir kez kaydeder; tekrar çağrılırsa aynı sonucu döndürür.
+    """
+
+    def __init__(self, tokens: Iterator[str], finish: Callable[[], Turn]):
+        self.tokens = tokens
+        self._finish = finish
+        self._turn: Turn | None = None
+
+    def finish(self) -> Turn:
+        if self._turn is None:
+            for _ in self.tokens:  # akış yarıda bırakıldıysa tamamla
+                pass
+            self._turn = self._finish()
+        return self._turn
+
+
 class LocalWorkspace:
     def __init__(self, settings: Settings | None = None, api_key: str | None = None):
         base = settings or get_settings()
         # Lexical reranker ile kalibre edilmiş varsayılanlar; LLM reranker çevrimdışı çalışmaz
-        self.settings = base.model_copy(update={"use_llm_reranker": False})
+        # Vitrin: örnek sözleşme için "Hukuk" departmanı eklenir (API'nin varsayılan departmanları değişmez)
+        departments = list(dict.fromkeys([*base.departments, *SHOWCASE_DEPARTMENTS]))
+        self.settings = base.model_copy(update={"use_llm_reranker": False, "departments": departments})
         self.store = InMemoryVectorStore(self.settings)
         self.llm, self.mode = self._make_llm(api_key or self.settings.api_key)
         if self.mode == OFFLINE_MODE:
@@ -253,9 +313,10 @@ class LocalWorkspace:
         doc = process_document(filename, data, department, self.settings)
         return doc, self.store.add_document(doc)
 
-    def load_sample_documents(self) -> int:
-        added = 0
-        mapping = {"ik": "İnsan Kaynakları", "fin": "Finans", "tek": "Teknik"}
+    def sample_documents(self) -> list[ProcessedDocument]:
+        """Örnek klasördeki belgeleri işler (önbelleğe alınabilir; bkz. app.py `_cached_samples`)."""
+        docs: list[ProcessedDocument] = []
+        mapping = {"ik": "İnsan Kaynakları", "fin": "Finans", "tek": "Teknik", "huk": "Hukuk"}
         for path in sorted(Path(self.settings.sample_docs_dir).glob("*.*")):
             if path.suffix.lower() not in {".md", ".txt", ".pdf", ".docx", ".xlsx"}:
                 continue
@@ -263,15 +324,44 @@ class LocalWorkspace:
             dept = next((d for k, d in mapping.items() if prefix.startswith(k)), self.settings.default_department)
             if dept not in self.settings.departments:
                 dept = self.settings.default_department
-            _, was_added = self.add_bytes(path.name, path.read_bytes(), dept)
-            added += was_added
-        return added
+            docs.append(process_document(path.name, path.read_bytes(), dept, self.settings))
+        return docs
+
+    def load_sample_documents(self, processed: Sequence[ProcessedDocument] | None = None) -> int:
+        return sum(self.store.add_document(doc) for doc in (processed if processed is not None
+                                                             else self.sample_documents()))
 
     @property
     def documents(self) -> list[LocalDocument]:
         return sorted(self.store.documents.values(), key=lambda d: d.added_at)
 
     # ------------------------------------------------------------ soru-cevap
+    def start(self, question: str, history: Sequence[Message] = (),
+              departments: Sequence[str] | None = None, *, audit: bool = True) -> PendingTurn:
+        """Yanıtı akışlı başlatır. Tek parçalı ve alaka kapısını geçen soruda model çıktısı token token akar;
+        bileşik/kurtarma/red yollarında yanıt hazırlanıp tek parça halinde verilir."""
+        depts = list(departments or [])
+        if len(split_compound(question)) < 2:
+            answer = self.engine.ask_stream(question, history, depts or None)
+            if answer.will_generate:
+                def finish() -> Turn:
+                    full = answer.response
+                    assert full is not None
+                    if full.is_answered or full.error:
+                        return self._complete(question, full, None, [], depts, audit)
+                    response, parts, outcomes = self._research(question, history, depts, full=full)
+                    return self._complete(question, response, parts, outcomes, depts, audit)
+
+                return PendingTurn(iter(answer), finish)
+
+        state: dict = {}
+
+        def tokens() -> Iterator[str]:
+            state["research"] = self._research(question, history, depts)
+            yield state["research"][0].answer
+
+        return PendingTurn(tokens(), lambda: self._complete(question, *state["research"], depts, audit))
+
     def run(self, question: str, history: Sequence[Message] = (),
             departments: Sequence[str] | None = None, *, audit: bool = True) -> Turn:
         """Bir kullanıcı sorusunu uçtan uca yanıtlar ve oturum geçmişine **tam bir kez** kaydeder.
@@ -279,8 +369,10 @@ class LocalWorkspace:
         Araştırmacı (RAG motoru) taslağı üretir; Denetçi yalnızca getirilen parçalarla doğrular. Bileşik
         sorularda her alt soru ayrı aranır ve ayrı denetlenir; sonuç tek yanıtta birleştirilir.
         """
-        depts = list(departments or [])
-        response, parts, outcomes = self._research(question, history, depts)
+        return self.start(question, history, departments, audit=audit).finish()
+
+    def _complete(self, question: str, response: RAGResponse, parts, outcomes: list[PartOutcome],  # noqa: ANN001
+                  depts: list[str], audit: bool) -> Turn:
         if response.error:  # servis hatası: denetlenecek yanıt yok; "bilgi yok" reddi gibi gösterilmez
             result = AuditResult("skipped", response.answer, "Yanıt üretilemediği için denetim yapılmadı.",
                                  "—", 0.0, [])
@@ -295,10 +387,11 @@ class LocalWorkspace:
         else:
             result = skipped(response)
         insight = self._insight(question, response, result, depts, outcomes)
+        insight.confidence, insight.confidence_level = calibrated_confidence(response, result, outcomes)
         # Oturum metriği kullanıcının gördüğüyle aynı: Denetçi'nin reddettiği yanıt "cevapsız, güven %0" sayılır
-        answered = response.is_answered and result.status != "rejected"
-        self.history.append(QueryLog(question, response.confidence if answered else 0, answered,
-                                     response.total_ms, len(response.citations) if answered else 0, result.status))
+        answered = response.is_answered and result.status != "rejected" and not response.error
+        self.history.append(QueryLog(question, insight.confidence, answered, response.total_ms,
+                                     len(response.citations) if answered else 0, result.status))
         return Turn(response, result, insight)
 
     def ask(self, question: str, history: Sequence[Message] = (),
@@ -321,7 +414,8 @@ class LocalWorkspace:
         chunks = self.engine.retriever.retrieve(query, departments or None, self.settings.top_k)
         return chunks[0].rerank_score if chunks else 0.0
 
-    def _research(self, question: str, history: Sequence[Message], depts: list[str]):  # noqa: ANN202
+    def _research(self, question: str, history: Sequence[Message], depts: list[str],  # noqa: ANN202
+                  *, full: RAGResponse | None = None):
         """(yanıt, alt soru yanıtları | None, alt soru sonuçları). Alt soru yanıtı yoksa tek parça akışıdır.
 
         Bileşik soruda önce yalnızca arama yapılır (LLM yok): her alt soru alaka kapısını geçiyorsa soru
@@ -330,10 +424,9 @@ class LocalWorkspace:
         """
         t0 = time.perf_counter()
         scope = depts or None
-        full: RAGResponse | None = None
         parts = split_compound(question)
         if len(parts) < 2:
-            full = self.engine.ask(question, history, scope)
+            full = full or self.engine.ask(question, history, scope)
             if full.is_answered or full.error:
                 return full, None, []
             parts = split_compound(question, relaxed=True)  # kurtarma: soru sözcüğü şartı olmadan dene

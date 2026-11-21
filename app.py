@@ -64,7 +64,7 @@ st.set_page_config(
     page_title="Kurumsal RAG Asistanı · Kurumsal Bilgi Platformu",
     page_icon="🧠",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",  # masaüstünde açık, mobilde kapalı başlar
 )
 
 for _attempt in range(3):
@@ -78,6 +78,7 @@ for _attempt in range(3):
         from src.rag_engine import RAGResponse
         from ui import showcase_charts as charts
         from ui import showcase_theme as theme
+        from ui.citations import number_citations, streaming_view
         break
     except (KeyError, ImportError):
         if _attempt == 2:
@@ -104,7 +105,9 @@ SAMPLE_LABELS = [
     "🧾 Kaç teklif almak gerekir?",
     "🍽️ Günlük yemek harcırahı",
 ]
-DEMO_SCRIPT = [*SAMPLE_QUESTIONS, "Şirketin Mars'taki ofisinin adresi nedir?"]  # son soru: halüsinasyon koruması
+CONTRACT_QUESTION = "Bakım sözleşmesinde P1 çözüm süresi aşılırsa hizmet kredisi ne kadar?"  # PDF + tablo
+DEMO_SCRIPT = [*SAMPLE_QUESTIONS, CONTRACT_QUESTION,
+               "Şirketin Mars'taki ofisinin adresi nedir?"]  # son soru: halüsinasyon koruması
 FILTER_KEY = "dept_filter"
 CHAT_KEY = "chat_box"
 ALL_DEPARTMENTS = "Tüm departmanlar"
@@ -125,6 +128,21 @@ def _state():  # noqa: ANN202
     return ss
 
 
+@st.cache_resource(show_spinner=False)
+def _cached_samples(signature: tuple) -> list:
+    """Örnek belgeler (PDF ayrıştırma + parçalama) sunucu başına bir kez işlenir; oturumlar paylaşır.
+
+    `signature` dosya adları/değişiklik zamanları ve parçalama ayarlarıdır: dosya değişirse yeniden işlenir.
+    """
+    return LocalWorkspace(get_settings()).sample_documents()
+
+
+def _sample_signature() -> tuple:
+    s = get_settings()
+    files = sorted((p.name, p.stat().st_mtime_ns) for p in Path(s.sample_docs_dir).glob("*.*"))
+    return (str(s.sample_docs_dir), s.chunk_size, s.chunk_overlap, tuple(files))
+
+
 def workspace(tenant: str) -> LocalWorkspace:
     ss = st.session_state
     current = ss.workspaces.get(tenant)
@@ -136,7 +154,7 @@ def workspace(tenant: str) -> LocalWorkspace:
         with st.spinner("Bilgi tabanı hazırlanıyor…"):
             ws = LocalWorkspace(get_settings())
             if tenant == SAMPLE_TENANT:
-                ws.load_sample_documents()
+                ws.load_sample_documents(_cached_samples(_sample_signature()))
             ss.workspaces[tenant] = ws
     return ss.workspaces[tenant]
 
@@ -342,13 +360,15 @@ def render_audit_report(audit: AuditResult, resp: RAGResponse, insight: AnswerIn
                 st.markdown(theme.audit_row(c.text, c.reason, c.supported), unsafe_allow_html=True)
 
 
-def render_answer(msg: dict, *, key: str, delay: float = 0.0, latest: bool = True) -> None:
+def render_answer(msg: dict, *, key: str, delay: float = 0.0, latest: bool = True, text_slot=None) -> None:  # noqa: ANN001
     """Yanıt metni (Denetçi kararıyla) + rozet + meta satırı + filtre nedeni + kaynak kartları + rapor."""
     resp: RAGResponse = msg["response"]
     audit: AuditResult | None = msg.get("audit")
     insight: AnswerInsight | None = msg.get("insight")
     if getattr(resp, "error", ""):
         # Servis hatası (Gemini 429/503…): "bilgi yok" reddi değildir → ayrı uyarı + tekrar dene
+        if text_slot is not None:
+            text_slot.empty()
         st.markdown(theme.service_error_card(resp.error), unsafe_allow_html=True)
         if latest:
             st.button("🔄 Tekrar dene", key=f"again_{key}", on_click=_submit,
@@ -356,26 +376,35 @@ def render_answer(msg: dict, *, key: str, delay: float = 0.0, latest: bool = Tru
         return
     audited = audit is not None and audit.status != "skipped"
     text = audit.answer if audited else resp.answer
-    if audited:
-        st.markdown(theme.audit_badge(audit.status), unsafe_allow_html=True)
-    if delay > 0:
+    answered = resp.is_answered and not (audited and audit.status == "rejected")
+    # Uzun etiketler ([IK_….md - Sayfa 4]) ekranda [1], [2] … olur; kaynak kartları aynı numaralarla listelenir
+    shown, numbered = number_citations(text, resp.citations)
+    if text_slot is not None:
+        text_slot.markdown(shown)  # akışın gösterildiği yere nihai (Denetçi sonrası) metin yazılır
+    elif delay > 0:
         def words():
-            for w in text.split(" "):
+            for w in shown.split(" "):
                 yield w + " "
                 time.sleep(delay)
         st.write_stream(words)
     else:
-        st.markdown(text)
+        st.markdown(shown)
 
-    answered = resp.is_answered and not (audited and audit.status == "rejected")
     partial = bool(insight and insight.missing_parts) and answered
     status = ("🧩 Kısmi kaynaklı yanıt" if partial else "✅ Kaynaklı yanıt") if answered \
         else "🛡️ Bilgi yok — uydurma yanıt engellendi"
-    # Gösterilen metinde atfı kalan kaynaklar (Denetçi bir iddiayı çıkardıysa kartı da gizlenir)
-    citations = ([c for c in resp.citations if f"[{c.label}]" in text] or resp.citations) if answered else []
+    by_label = {c.label: c for c in resp.citations}
+    citations = [c for c in numbered if getattr(c, "label", None) in by_label] if answered else []
+    if answered and not citations:
+        citations = list(resp.citations)
+    confidence = insight.confidence if insight is not None and insight.confidence_level else \
+        (resp.confidence if answered else 0)
+    level = insight.confidence_level if insight is not None and answered else ""
+    badge = theme.audit_badge(audit.status) if audited else ""
     st.markdown(
-        f'<div class="meta">{status} · Güven %{resp.confidence if answered else 0} · {resp.total_ms:.0f} ms · '
-        f'{len(citations)} kaynak</div>', unsafe_allow_html=True,
+        f'<div class="answer-foot">{badge}{theme.confidence_pill(confidence, level) if answered else ""}'
+        f'<div class="meta">{status} · {resp.total_ms / 1000:.1f} sn · {len(citations)} kaynak</div></div>',
+        unsafe_allow_html=True,
     )
     if insight is not None and insight.empty_index and not answered:
         st.info("Bu tenant'ın bilgi tabanında henüz belge yok. Kenar çubuğundaki **📤 Belge yükle** bölümünden "
@@ -392,9 +421,9 @@ def render_answer(msg: dict, *, key: str, delay: float = 0.0, latest: bool = Tru
             with left:
                 with st.expander(f"📎 Kaynaklar ({len(citations)}) — bilginin alındığı doküman ve sayfa",
                                  expanded=False):
-                    for c in citations:
+                    for n, c in enumerate(citations, start=1):
                         st.markdown(theme.citation_card(c.label, c.source, c.page, c.department, c.relevance,
-                                                        c.evidence), unsafe_allow_html=True)
+                                                        c.evidence, number=n), unsafe_allow_html=True)
         if audited:
             with right:
                 render_audit_report(audit, resp, insight)
@@ -405,7 +434,8 @@ def render_answer(msg: dict, *, key: str, delay: float = 0.0, latest: bool = Tru
 
 def process_submission(tenant: str, ws: LocalWorkspace, question: str, departments: list[str], *,
                        on_recorded, animate: bool = True) -> None:  # noqa: ANN001
-    """Soruyu yanıtlar, sonucu **çizimden önce** kaydeder (tam bir kez), ardından yanıtı çizer."""
+    """Yanıtı token token akıtır; akış bitince Denetçi çalışır, sonuç **çizimden önce** tam bir kez kaydedilir,
+    ardından rozet, güven ve kaynak kartları akışın altına eklenir."""
     ss = st.session_state
     msgs = messages(tenant)
     history = [(m["role"], m["content"]) for m in msgs]
@@ -413,16 +443,33 @@ def process_submission(tenant: str, ws: LocalWorkspace, question: str, departmen
         st.markdown(question)
     with st.chat_message("assistant", avatar="🧠"):
         auditing = bool(ss.auditor_on)
-        spinner = ("Araştırmacı yanıt hazırlıyor, Denetçi kaynaklarla doğruluyor…" if auditing
-                   else "Hibrit arama yapılıyor ve kaynaklar doğrulanıyor…")
-        with st.spinner(spinner):
-            turn = ws.run(question, history, departments, audit=auditing)
-            # Kayıt: ws.run ile bu satırlar arasında Streamlit çağrısı yok → rerun burayı bölemez
-            msgs.append({"role": "user", "content": question})
-            msgs.append({"role": "assistant", "content": turn.audit.answer, "question": question,
-                         "response": turn.response, "audit": turn.audit, "insight": turn.insight})
-            on_recorded()
-        render_answer(msgs[-1], key=str(len(msgs) - 1), delay=ss.stream_delay if animate else 0.0)
+        status = st.empty()
+        text_slot = st.empty()
+        status.markdown('<div class="meta">🔎 Kaynaklar aranıyor…</div>', unsafe_allow_html=True)
+        pending = ws.start(question, history, departments, audit=auditing)
+        delay = ss.stream_delay if animate else 0.0
+        shown = ""
+        for chunk in pending.tokens:
+            if not shown:
+                status.markdown('<div class="meta">✍️ Araştırmacı yanıtı yazıyor…</div>', unsafe_allow_html=True)
+            # Model parçaları zaten akar; tek parça gelen (çevrimdışı) yanıtta yazma efekti için kelimelere böl
+            pieces = chunk.split(" ") if delay > 0 and len(chunk) > 40 else [chunk]
+            for i, piece in enumerate(pieces):
+                shown += piece + (" " if i < len(pieces) - 1 else "")
+                text_slot.markdown(streaming_view(shown) + " ▌")
+                if delay > 0 and len(pieces) > 1:
+                    time.sleep(delay)
+        if auditing:
+            status.markdown('<div class="meta">🛡️ Denetçi her iddiayı kaynaklarla karşılaştırıyor…</div>',
+                            unsafe_allow_html=True)
+        turn = pending.finish()
+        # Kayıt: finish() ile bu satırlar arasında Streamlit çağrısı yok → rerun burayı bölemez
+        msgs.append({"role": "user", "content": question})
+        msgs.append({"role": "assistant", "content": turn.audit.answer, "question": question,
+                     "response": turn.response, "audit": turn.audit, "insight": turn.insight})
+        on_recorded()
+        status.empty()
+        render_answer(msgs[-1], key=str(len(msgs) - 1), text_slot=text_slot)
 
 
 # ====================================================================== sekmeler
@@ -431,6 +478,8 @@ def tab_assistant(tenant: str, ws: LocalWorkspace, departments: list[str], kpis:
     msgs = messages(tenant)
     waiting = [s for s in ss.inbox if s["tenant"] == tenant]
     if not msgs and not waiting and not ss.demo_queue:
+        st.button("▶ Canlı demoyu başlat", key="demo_main", type="primary", on_click=_start_demo,
+                  help="Hazır soruları sırayla sorar: kaynaklı yanıtlar, sözleşme tablosu ve uydurma engeli.")
         st.markdown('<div class="section-title">💡 Hızlı başlangıç — örnek sorular</div>', unsafe_allow_html=True)
         cols = st.columns(len(SAMPLE_QUESTIONS))
         for i, (col, label, q) in enumerate(zip(cols, SAMPLE_LABELS, SAMPLE_QUESTIONS, strict=True)):
@@ -470,6 +519,7 @@ def tab_assistant(tenant: str, ws: LocalWorkspace, departments: list[str], kpis:
 
 
 def tab_analytics(ws: LocalWorkspace) -> None:
+    st.markdown(theme.SIMULATED_BANNER, unsafe_allow_html=True)
     c1, c2 = st.columns([3, 2])
     with c1:
         render_chart(charts.usage_figure(charts.sample_usage(), session_queries=len(ws.history)))

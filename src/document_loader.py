@@ -147,6 +147,26 @@ def _load_pdf(data: bytes) -> list[PageContent]:
         return _load_pdf_pypdf(data)
 
 
+_SOFT_WRAP_NEXT_RE = re.compile(r"^[a-zçğıöşü0-9%(\"“'‘]")
+
+
+def _unwrap_lines(text: str) -> str:
+    """PDF'in görsel satır kaydırmalarını birleştirir: cümle ortasında bölünmüş satırlar tek satır olur.
+
+    Önceki satır cümle sonu işaretiyle (. : ; ! ?) bitmiyorsa ve sonraki satır küçük harf/rakamla başlıyorsa
+    satırlar birleştirilir. Başlıklar ("Madde 3 – …") ve büyük harfle başlayan yeni cümleler korunur.
+    """
+    out: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if (out and out[-1] and stripped and not out[-1].rstrip().endswith((".", ":", ";", "!", "?"))
+                and _SOFT_WRAP_NEXT_RE.match(stripped)):
+            out[-1] = f"{out[-1].rstrip()} {stripped}"
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def _load_pdf_plumber(data: bytes) -> list[PageContent]:
     import pdfplumber
 
@@ -160,11 +180,11 @@ def _load_pdf_plumber(data: bytes) -> list[PageContent]:
             for table in tables:
                 t_top, t_bottom = table.bbox[1], table.bbox[3]
                 if t_top > cursor:  # tablodan önceki metin
-                    parts.append(page.crop((x0, cursor, x1, t_top)).extract_text() or "")
+                    parts.append(_unwrap_lines(page.crop((x0, cursor, x1, t_top)).extract_text() or ""))
                 parts.append(rows_to_markdown(table.extract()))
                 cursor = max(cursor, t_bottom)
             if cursor < bottom:
-                parts.append(page.crop((x0, cursor, x1, bottom)).extract_text() or "")
+                parts.append(_unwrap_lines(page.crop((x0, cursor, x1, bottom)).extract_text() or ""))
             text = "\n\n".join(p for p in (s.strip() for s in parts) if p)
             pages.append(PageContent(page=number, text=_normalize_text(text)))
     return pages
@@ -178,7 +198,7 @@ def _load_pdf_pypdf(data: bytes) -> list[PageContent]:
         if reader.is_encrypted:
             reader.decrypt("")
         return [
-            PageContent(page=i, text=_normalize_text(p.extract_text() or ""))
+            PageContent(page=i, text=_normalize_text(_unwrap_lines(p.extract_text() or "")))
             for i, p in enumerate(reader.pages, start=1)
         ]
     except Exception as exc:  # noqa: BLE001
