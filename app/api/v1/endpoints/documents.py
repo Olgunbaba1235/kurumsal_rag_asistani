@@ -3,9 +3,10 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 
-from app.api.deps import Container, CurrentTenant
+from app.api.deps import Container, CurrentTenant, require
+from app.core.permissions import Action
 from app.schemas.common import ErrorResponse
 from app.schemas.document import DocumentList, DocumentOut, UploadResponse
 from app.services.document_service import DocumentNotFoundError
@@ -22,6 +23,7 @@ _ERRORS = {
 
 @router.post(
     "/upload",
+    dependencies=[Depends(require(Action.DOCS_UPLOAD))],
     response_model=UploadResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Belge yükle (PDF, DOCX, XLSX, TXT, MD)",
@@ -124,6 +126,7 @@ async def get_document(document_id: uuid.UUID, tenant: CurrentTenant, container:
 
 @router.delete(
     "/{document_id}",
+    dependencies=[Depends(require(Action.DOCS_DELETE))],
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Belgeyi sil",
     responses={404: {"model": ErrorResponse}, **_ERRORS},

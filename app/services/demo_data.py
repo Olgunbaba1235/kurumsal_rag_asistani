@@ -98,7 +98,7 @@ def _weighted(rng: random.Random, options: dict[str, float]) -> str:
 
 
 async def _counts(db: Database, tenant: TenantContext) -> SeedResult:
-    async with db.tenant_session(tenant.id) as s:
+    async with db.tenant_session(tenant.id, tenant.departments) as s:
         counts = []
         for model in (Customer, Product, Order, OrderItem):
             counts.append(int(await s.scalar(select(func.count()).select_from(model)) or 0))
@@ -120,7 +120,7 @@ async def seed_demo_sales(
 
     rng = random.Random(tenant.id.int)
 
-    async with db.tenant_session(tenant.id) as s, s.begin():
+    async with db.tenant_session(tenant.id, tenant.departments) as s, s.begin():
         # ---- ürünler
         product_rows = []
         for i, (category, name, unit, price) in enumerate(PRODUCTS, start=1):

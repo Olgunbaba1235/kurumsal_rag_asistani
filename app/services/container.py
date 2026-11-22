@@ -8,6 +8,7 @@ from app.core.config import ApiSettings
 from app.core.db import Database
 from app.core.redis import RateLimiter, RedisLike, create_redis
 from app.services.analytics_service import AnalyticsService
+from app.services.auth_service import AuthService
 from app.services.document_service import DocumentService
 from app.services.orchestrator_service import MultiAgentOrchestrator
 from app.services.providers import Providers, build_providers
@@ -23,8 +24,10 @@ class ServiceContainer:
     db: Database
     redis: RedisLike | None
     rate_limiter: RateLimiter
+    auth_rate_limiter: RateLimiter
     providers: Providers
     tenants: TenantService
+    auth: AuthService
     documents: DocumentService
     retriever: PgHybridRetriever
     rag: RAGService
@@ -54,8 +57,10 @@ class ServiceContainer:
             db=db,
             redis=redis,
             rate_limiter=RateLimiter(redis, settings.rate_limit_per_minute),
+            auth_rate_limiter=RateLimiter(redis, settings.auth_rate_limit_per_minute),
             providers=providers,
             tenants=TenantService(db),
+            auth=AuthService(db, settings),
             documents=DocumentService(db, settings, providers.embedder),
             retriever=retriever,
             rag=rag,

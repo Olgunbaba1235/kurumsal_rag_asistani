@@ -22,7 +22,9 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.api.v1.router import api_router
 from app.core.config import ApiSettings, get_api_settings
+from app.services.auth_service import AuthServiceError
 from app.services.container import ServiceContainer
+from app.services.tenant_service import DepartmentForbiddenError
 from app.core.logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -86,6 +88,8 @@ def create_app(settings: ApiSettings | None = None, container_factory: Container
             {"name": "Belgeler", "description": "Belge yükleme, listeleme ve silme (tenant + departman kapsamlı)"},
             {"name": "Sohbet", "description": "Hibrit arama ve kaynak referanslı yanıt üretimi"},
             {"name": "Analitik", "description": "Text-to-SQL veri analizi ve doküman + veri birleşik yanıtlar"},
+            {"name": "Kimlik", "description": "Kayıt, giriş, oturum, davet kabulü"},
+            {"name": "Şirket Yönetimi", "description": "Üyeler, roller, davetler, sahiplik, API anahtarı"},
             {"name": "Yönetim", "description": "Platform yöneticisi: tenant oluşturma"},
         ],
     )
@@ -115,6 +119,15 @@ def create_app(settings: ApiSettings | None = None, container_factory: Container
         response.headers["X-Process-Time-Ms"] = f"{elapsed:.1f}"
         logger.info("%s %s → %s (%.0f ms) [%s]", request.method, request.url.path, response.status_code, elapsed, request_id)
         return response
+
+    @app.exception_handler(AuthServiceError)
+    async def _auth_error(request: Request, exc: AuthServiceError) -> JSONResponse:
+        headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.message}, headers=headers)
+
+    @app.exception_handler(DepartmentForbiddenError)
+    async def _department_forbidden(request: Request, exc: DepartmentForbiddenError) -> JSONResponse:
+        return JSONResponse(status_code=403, content={"detail": str(exc)})
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
 

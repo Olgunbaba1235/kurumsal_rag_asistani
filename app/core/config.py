@@ -53,6 +53,16 @@ class ApiSettings(Settings):
     # ------------------------------------------------------------ Güvenlik
     admin_api_key: SecretStr | None = Field(default=None, alias="ADMIN_API_KEY")
 
+    # ------------------------------------------------------------ Kullanıcı oturumları
+    session_ttl_hours: int = Field(default=12, ge=1, le=168, alias="SESSION_TTL_HOURS")
+    session_idle_minutes: int = Field(default=120, ge=5, le=1440, alias="SESSION_IDLE_MINUTES")
+    invitation_ttl_hours: int = Field(default=72, ge=1, le=720, alias="INVITATION_TTL_HOURS")
+    login_max_failures: int = Field(default=5, ge=1, le=50, alias="LOGIN_MAX_FAILURES")
+    login_lockout_minutes: int = Field(default=15, ge=1, le=1440, alias="LOGIN_LOCKOUT_MINUTES")
+    # Kayıt/giriş/davet kabulü için IP başına dakikalık sınır (Redis varsa)
+    auth_rate_limit_per_minute: int = Field(default=10, ge=0, alias="AUTH_RATE_LIMIT_PER_MINUTE")
+    allow_signup: bool = Field(default=True, alias="ALLOW_SIGNUP")
+
     # ------------------------------------------------------------ Sağlayıcılar
     embedding_provider: Literal["gemini", "hashing"] = Field(default="gemini", alias="EMBEDDING_PROVIDER")
     llm_provider: Literal["gemini", "none"] = Field(default="gemini", alias="LLM_PROVIDER")

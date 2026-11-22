@@ -57,15 +57,19 @@ class RAGService:
 
         # 2) Hibrit arama (tenant + departman kapsamlı)
         t0 = time.perf_counter()
-        async with self.db.tenant_session(tenant.id) as session:
-            chunks, search_timings, reranker_used = await self.retriever.retrieve(
-                session,
-                tenant,
-                rewritten.standalone,
-                departments,
-                top_k=top_k or s.top_k,
-                extra_queries=rewritten.variants,
-            )
+        if not departments:
+            # Erişebildiği departman olmayan kullanıcı: arama yapılmaz, "bilgi yok" yanıtı döner
+            chunks, search_timings, reranker_used = [], {}, "none"
+        else:
+            async with self.db.tenant_session(tenant.id, tenant.departments) as session:
+                chunks, search_timings, reranker_used = await self.retriever.retrieve(
+                    session,
+                    tenant,
+                    rewritten.standalone,
+                    departments,
+                    top_k=top_k or s.top_k,
+                    extra_queries=rewritten.variants,
+                )
         timings["retrieval_ms"] = round((time.perf_counter() - t0) * 1000, 1)
         timings.update(search_timings)
 

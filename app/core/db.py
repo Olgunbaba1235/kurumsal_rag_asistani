@@ -16,9 +16,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 
 from sqlalchemy import event, text
@@ -30,6 +31,8 @@ from app.core.config import ApiSettings
 logger = logging.getLogger(__name__)
 
 TENANT_KEY = "tenant_id"
+DEPTS_KEY = "departments"
+ALL_DEPARTMENTS = "*"  # departman RLS'inde "şirketin tüm departmanları"
 ROLE_KEY = "db_role"
 VECTOR_KEY = "iterative_scan"
 
@@ -60,6 +63,12 @@ def _apply_session_scope(session: Session, transaction, connection) -> None:  # 
         connection.execute(
             text("SELECT set_config('app.tenant_id', :tid, true)"), {"tid": str(tenant_id)}
         )
+    departments = session.info.get(DEPTS_KEY)
+    if tenant_id is not None and departments is not None:
+        # documents / document_chunks üzerindeki department_scope politikası bunu okur;
+        # ayar yoksa (ör. ham bağlantı) hiçbir belge görünmez.
+        value = departments if departments == ALL_DEPARTMENTS else json.dumps(list(departments), ensure_ascii=False)
+        connection.execute(text("SELECT set_config('app.departments', :d, true)"), {"d": value})
     if session.info.get(VECTOR_KEY):
         connection.exec_driver_sql("SET LOCAL hnsw.iterative_scan = relaxed_order")
 
@@ -72,10 +81,11 @@ class Database:
         self.engine = engine or create_engine(settings)
         self._sessionmaker = create_sessionmaker(self.engine)
 
-    def _info(self, tenant_id: uuid.UUID | None) -> dict:
+    def _info(self, tenant_id: uuid.UUID | None, departments: Sequence[str] | str = ALL_DEPARTMENTS) -> dict:
         info: dict = {ROLE_KEY: self.settings.db_session_role}
         if tenant_id is not None:
             info[TENANT_KEY] = tenant_id
+            info[DEPTS_KEY] = departments if departments == ALL_DEPARTMENTS else tuple(departments)
             info[VECTOR_KEY] = self.settings.pgvector_iterative_scan
         return info
 
@@ -87,10 +97,17 @@ class Database:
             yield session
 
     @asynccontextmanager
-    async def tenant_session(self, tenant_id: uuid.UUID) -> AsyncIterator[AsyncSession]:
+    async def tenant_session(
+        self, tenant_id: uuid.UUID, departments: Sequence[str] | str = ALL_DEPARTMENTS
+    ) -> AsyncIterator[AsyncSession]:
+        """Tenant kapsamlı oturum. ``departments``: belge tablolarında görünür departmanlar
+        (``ALL_DEPARTMENTS`` = şirketin tümü). İstek işleyen servisler her zaman isteği yapan
+        kimliğin izinli departmanlarını verir (bkz. ``TenantContext.departments``)."""
         if not isinstance(tenant_id, uuid.UUID):
             raise TypeError("tenant_id bir UUID olmalıdır")
-        async with self._sessionmaker(info=self._info(tenant_id)) as session:
+        if isinstance(departments, str) and departments != ALL_DEPARTMENTS:
+            raise TypeError("departments bir liste ya da ALL_DEPARTMENTS olmalıdır")
+        async with self._sessionmaker(info=self._info(tenant_id, departments)) as session:
             yield session
 
     async def ping(self) -> bool:

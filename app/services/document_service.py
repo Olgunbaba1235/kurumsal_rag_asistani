@@ -81,7 +81,7 @@ class DocumentService:
         name = self.validate_upload(filename, len(data))
         content_hash = compute_doc_id(data)
 
-        async with self.db.tenant_session(tenant.id) as session:
+        async with self.db.tenant_session(tenant.id, tenant.departments) as session:
             existing = await session.scalar(
                 select(Document).where(
                     Document.tenant_id == tenant.id,
@@ -113,7 +113,7 @@ class DocumentService:
         try:
             # Departman doğrulaması tenant'ın kendi departman listesine göre yapılır
             scoped_settings = self.settings.model_copy(
-                update={"departments": list(tenant.departments), "default_department": tenant.departments[0]}
+                update={"departments": list(tenant.defined_departments), "default_department": tenant.defined_departments[0]}
             )
             processed = await asyncio.to_thread(
                 process_document, doc.filename, data, doc.department, scoped_settings
@@ -123,7 +123,7 @@ class DocumentService:
             if len(vectors) != len(texts):
                 raise DocumentProcessingError("Embedding sayısı parça sayısıyla eşleşmiyor.")
 
-            async with self.db.tenant_session(tenant.id) as session, session.begin():
+            async with self.db.tenant_session(tenant.id, tenant.departments) as session, session.begin():
                 # 1) Aynı adlı eski hazır sürüm(ler)i kaldır
                 await session.execute(
                     delete(Document).where(
@@ -170,7 +170,7 @@ class DocumentService:
         except Exception as exc:  # noqa: BLE001 — her hata belgeye yazılmalı
             message = str(exc) if isinstance(exc, DocumentProcessingError) else f"İşleme hatası: {exc}"
             logger.exception("[%s] %s işlenemedi", tenant.slug, doc.filename)
-            async with self.db.tenant_session(tenant.id) as session, session.begin():
+            async with self.db.tenant_session(tenant.id, tenant.departments) as session, session.begin():
                 await session.execute(
                     update(Document)
                     .where(Document.id == doc.id, Document.tenant_id == tenant.id)
@@ -180,7 +180,7 @@ class DocumentService:
 
     # ------------------------------------------------------------ okuma / silme
     async def get(self, tenant: TenantContext, document_id: uuid.UUID) -> Document:
-        async with self.db.tenant_session(tenant.id) as session:
+        async with self.db.tenant_session(tenant.id, tenant.departments) as session:
             doc = await session.scalar(
                 select(Document).where(Document.id == document_id, Document.tenant_id == tenant.id)
             )
@@ -202,7 +202,7 @@ class DocumentService:
             conditions.append(Document.department == tenant.resolve_departments([department])[0])
         if status:
             conditions.append(Document.status == status)
-        async with self.db.tenant_session(tenant.id) as session:
+        async with self.db.tenant_session(tenant.id, tenant.departments) as session:
             total = await session.scalar(select(func.count()).select_from(Document).where(*conditions)) or 0
             docs = (
                 await session.scalars(
@@ -216,7 +216,7 @@ class DocumentService:
         return list(docs), int(total)
 
     async def delete(self, tenant: TenantContext, document_id: uuid.UUID) -> None:
-        async with self.db.tenant_session(tenant.id) as session, session.begin():
+        async with self.db.tenant_session(tenant.id, tenant.departments) as session, session.begin():
             result = await session.execute(
                 delete(Document).where(Document.id == document_id, Document.tenant_id == tenant.id)
             )

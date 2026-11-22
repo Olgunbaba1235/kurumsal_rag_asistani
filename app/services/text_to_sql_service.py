@@ -303,7 +303,7 @@ class TextToSQLService:
     async def execute(self, tenant: TenantContext, validated: ValidatedSQL) -> QueryResult:
         """Doğrulanmış SQL'i salt-okunur, zaman aşımlı, en az yetkili rolle çalıştırır."""
         s = self.settings
-        async with self.db.tenant_session(tenant.id) as session, session.begin():
+        async with self.db.tenant_session(tenant.id, tenant.departments) as session, session.begin():
             conn = await session.connection()
             await conn.exec_driver_sql("SET TRANSACTION READ ONLY")
             await conn.exec_driver_sql(f"SET LOCAL statement_timeout = {int(s.analytics_statement_timeout_ms)}")

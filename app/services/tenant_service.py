@@ -24,7 +24,13 @@ class TenantConflictError(TenantError):
 
 
 class DepartmentNotAllowedError(TenantError):
-    pass
+    """Şirkette tanımlı olmayan departman (422)."""
+
+
+class DepartmentForbiddenError(TenantError):
+    """Şirkette tanımlı ama isteği yapan kimliğe atanmamış departman (403).
+    Bilerek ``DepartmentNotAllowedError`` alt sınıfı değildir: uç noktalar onu 422'ye
+    çevirmesin, genel işleyici 403 döndürsün."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,24 +43,45 @@ class TenantContext:
     id: uuid.UUID
     slug: str
     name: str
+    # İsteği yapan kimliğin ERİŞEBİLDİĞİ departmanlar (API anahtarı/admin: şirketin tümü).
+    # Servisler veritabanı oturumuna da bunu verir → departman RLS'i aynı kümeyi uygular.
     departments: tuple[str, ...]
+    # Şirkette tanımlı tüm departmanlar; boşsa ``departments`` ile aynı kabul edilir.
+    all_departments: tuple[str, ...] = ()
+
+    @property
+    def defined_departments(self) -> tuple[str, ...]:
+        return self.all_departments or self.departments
 
     def resolve_departments(self, requested: Sequence[str] | None) -> list[str]:
-        """İstenen departmanları tenant'ın tanımlı departmanlarıyla doğrular.
-        Boşsa tenant'ın tüm departmanları döner."""
+        """İstenen departmanları doğrular. Boşsa erişilebilen tüm departmanlar döner.
+        Tanımsız departman → ``DepartmentNotAllowedError`` (422); tanımlı ama erişimi
+        olmayan → ``DepartmentForbiddenError`` (403)."""
         if not requested:
             return list(self.departments)
         cleaned = list(dict.fromkeys(d.strip() for d in requested if d and d.strip()))
-        unknown = [d for d in cleaned if d not in self.departments]
+        unknown = [d for d in cleaned if d not in self.defined_departments]
         if unknown or not cleaned:
             raise DepartmentNotAllowedError(
-                f"Geçersiz departman: {', '.join(unknown) or '(boş)'}. Tanımlı departmanlar: {', '.join(self.departments)}"
+                f"Geçersiz departman: {', '.join(unknown) or '(boş)'}. "
+                f"Tanımlı departmanlar: {', '.join(self.defined_departments)}"
             )
+        forbidden = [d for d in cleaned if d not in self.departments]
+        if forbidden:
+            raise DepartmentForbiddenError(f"Bu departmana erişim yetkiniz yok: {', '.join(forbidden)}")
         return cleaned
+
+    def scoped(self, departments: Sequence[str]) -> TenantContext:
+        """Aynı şirket, yalnızca verilen departmanlara daraltılmış bağlam."""
+        return TenantContext(
+            id=self.id, slug=self.slug, name=self.name,
+            departments=tuple(departments), all_departments=self.defined_departments,
+        )
 
 
 def _context(t: Tenant) -> TenantContext:
-    return TenantContext(id=t.id, slug=t.slug, name=t.name, departments=tuple(t.departments))
+    depts = tuple(t.departments)
+    return TenantContext(id=t.id, slug=t.slug, name=t.name, departments=depts, all_departments=depts)
 
 
 class TenantService:

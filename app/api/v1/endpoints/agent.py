@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.api.deps import Container, CurrentTenant
-from app.schemas.agent import AgentQuery, AgentResponse, B2BReport, RagSourceOut, SqlSummaryOut
+from app.api.deps import Container, CurrentPrincipal, CurrentTenant
+from app.core.permissions import Action, can
+from app.schemas.agent import AgentQuery, Intent, AgentResponse, B2BReport, RagSourceOut, SqlSummaryOut
 from app.schemas.common import ErrorResponse
 from app.services.tenant_service import DepartmentNotAllowedError
 
@@ -16,7 +17,9 @@ router = APIRouter()
     summary="Multi-Agent orkestratör: niyet → paralel RAG + SQL → B2B raporu",
     responses={401: {"model": ErrorResponse}, 422: {"model": ErrorResponse}, 429: {"model": ErrorResponse}},
 )
-async def agent_query(body: AgentQuery, tenant: CurrentTenant, container: Container) -> AgentResponse:
+async def agent_query(
+    body: AgentQuery, tenant: CurrentTenant, principal: CurrentPrincipal, container: Container
+) -> AgentResponse:
     """Sorunun niyetini (`DOCUMENT_ONLY`, `SQL_ONLY`, `HYBRID`) belirler, uzman ajanları paralel çalıştırır
     ve sonuçları tek bir kurumsal analiz raporunda sentezler. Tüm veri erişimi tenant ile sınırlıdır."""
     if len(body.question) > container.settings.max_question_chars:
@@ -24,6 +27,12 @@ async def agent_query(body: AgentQuery, tenant: CurrentTenant, container: Contai
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"Soru en fazla {container.settings.max_question_chars} karakter olabilir.",
         )
+    intent = body.intent
+    if not can(principal.actor, Action.ANALYTICS):
+        # Satış verisi departmansızdır ve yalnızca owner/admin'e açıktır (karar 4)
+        if intent in (Intent.SQL_ONLY, Intent.HYBRID):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Veri analitiğine erişim yetkiniz yok.")
+        intent = Intent.DOCUMENT_ONLY
     try:
         departments = tenant.resolve_departments(body.departments)
     except DepartmentNotAllowedError as exc:
@@ -34,7 +43,7 @@ async def agent_query(body: AgentQuery, tenant: CurrentTenant, container: Contai
         body.question,
         departments,
         [(t.role, t.content) for t in body.history],
-        intent=body.intent,
+        intent=intent,
         top_k=body.top_k,
     )
     sources = (

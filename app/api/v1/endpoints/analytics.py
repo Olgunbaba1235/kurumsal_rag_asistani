@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import Container, CurrentTenant
+from app.api.deps import Container, CurrentTenant, require
+from app.core.permissions import Action
 from app.schemas.analytics import (
     AnalyticsQuery,
     AnalyticsResponse,
@@ -25,6 +26,7 @@ router = APIRouter()
 
 @router.post(
     "/query",
+    dependencies=[Depends(require(Action.ANALYTICS))],
     response_model=AnalyticsResponse,
     summary="Birleşik analitik: dokümanlar (RAG) + satış verisi (Text-to-SQL)",
     responses={401: {"model": ErrorResponse}, 422: {"model": ErrorResponse}, 429: {"model": ErrorResponse}},
@@ -67,7 +69,12 @@ async def analytics_query(body: AnalyticsQuery, tenant: CurrentTenant, container
     )
 
 
-@router.get("/schema", response_model=SchemaInfo, summary="Sorgulanabilir veri şeması")
+@router.get(
+    "/schema",
+    response_model=SchemaInfo,
+    summary="Sorgulanabilir veri şeması",
+    dependencies=[Depends(require(Action.ANALYTICS))],
+)
 async def analytics_schema(tenant: CurrentTenant) -> SchemaInfo:
     """Text-to-SQL ajanının erişebildiği tablolar ve sütunlar."""
     return SchemaInfo(tables=list(ANALYTICS_TABLES), description=SCHEMA_DESCRIPTION)
@@ -75,6 +82,7 @@ async def analytics_schema(tenant: CurrentTenant) -> SchemaInfo:
 
 @router.post(
     "/demo-data",
+    dependencies=[Depends(require(Action.DEMO_DATA))],
     response_model=DemoDataResult,
     summary="Demo satış verisi oluştur (yalnızca kendi şirketiniz için)",
     responses={403: {"model": ErrorResponse}},
