@@ -34,10 +34,38 @@ class ApiError(Exception):
 
 
 class ApiClient:
-    def __init__(self, base_url: str, api_key: str, timeout: float = 180.0):
+    """API anahtarıyla (``X-API-Key``) veya kullanıcı oturumuyla (``Authorization: Bearer``) çalışır."""
+
+    def __init__(self, base_url: str, api_key: str | None = None, timeout: float = 180.0, *, token: str | None = None):
         self.base = base_url.rstrip("/") + "/api/v1"
-        self.headers = {"X-API-Key": api_key}
+        self.headers = {"Authorization": f"Bearer {token}"} if token else {"X-API-Key": api_key or ""}
         self.timeout = timeout
+
+    @property
+    def identity(self) -> str:
+        """Sonuçları kimlik başına ayırmak için anahtar (ham değer ekranda gösterilmez)."""
+        return self.headers.get("X-API-Key") or self.headers.get("Authorization", "")
+
+    @staticmethod
+    def login(base_url: str, email: str, password: str, company_slug: str, timeout: float = 30.0) -> dict:
+        try:
+            r = httpx.post(
+                base_url.rstrip("/") + "/api/v1/auth/login",
+                json={"email": email, "password": password, "company_slug": company_slug},
+                timeout=timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise ApiError(f"Backend'e ulaşılamadı: {exc}") from exc
+        if r.status_code != 200:
+            try:
+                detail = r.json().get("detail", r.text)
+            except ValueError:
+                detail = r.text
+            raise ApiError(str(detail))
+        return r.json()
+
+    def logout(self) -> None:
+        self._request("POST", "/auth/logout")
 
     def _request(self, method: str, path: str, **kw: Any) -> Any:
         try:
@@ -95,6 +123,7 @@ def rows_to_df(columns: list[str], rows: list[list]) -> pd.DataFrame:
 
 
 MANUAL_TENANT = "__manual__"
+LOGIN_TENANT = "__login__"
 
 
 def load_tenant_profiles(raw: Any) -> dict[str, dict[str, Any]]:
@@ -266,7 +295,7 @@ def tab_analytics(api: ApiClient, departments: list[str]) -> None:
     # Sonuç tenant (API anahtarı) başına saklanır: grafik ayarı değiştirmek gibi yeniden çalıştırmalarda
     # tablo kaybolmaz ve başka tenant'a geçildiğinde önceki şirketin sonucu gösterilmez.
     results = st.session_state.setdefault("analytics_results", {})
-    tenant_key = api.headers["X-API-Key"]
+    tenant_key = api.identity
     if st.button("Sorgula", type="primary") and q.strip():
         with st.spinner("Sorgu çalışıyor…"):
             try:
@@ -309,12 +338,45 @@ def main() -> None:
     with st.sidebar:
         st.title("🏢 Kurumsal Asistan")
         base = st.text_input("API adresi", api_default)
+        labels = {MANUAL_TENANT: "✍️ Manuel giriş (API anahtarı)", LOGIN_TENANT: "🔐 Kullanıcı girişi"}
         tenant_id = st.selectbox(
-            "Tenant ID", [*profiles, MANUAL_TENANT],
-            format_func=lambda t: "✍️ Manuel giriş" if t == MANUAL_TENANT else f"{t} · {profiles[t]['name']}",
+            "Tenant ID", [*profiles, MANUAL_TENANT, LOGIN_TENANT],
+            format_func=lambda t: labels.get(t) or f"{t} · {profiles[t]['name']}",
             help="Profiller `.streamlit/secrets.toml` → `[tenants.<id>]` bölümlerinden okunur.",
         )
-        if tenant_id == MANUAL_TENANT:
+        token = None
+        can_analytics = True
+        if tenant_id == LOGIN_TENANT:
+            sess = st.session_state.get("user_session")
+            if sess is None:
+                with st.form("login"):
+                    company = st.text_input("Şirket kısa adı", placeholder="ornek-holding")
+                    email = st.text_input("E-posta")
+                    password = st.text_input("Parola", type="password")
+                    if st.form_submit_button("Giriş yap", type="primary"):
+                        try:
+                            st.session_state["user_session"] = ApiClient.login(base, email, password, company.strip())
+                            st.rerun()
+                        except ApiError as exc:
+                            st.error(str(exc))
+                key, tenant_departments = "", []
+            else:
+                me = sess["me"]
+                token = sess["token"]
+                tenant_id = me["company"]["slug"]
+                tenant_departments = me["departments"]
+                can_analytics = me["role"] == "admin"
+                key = token
+                role = {"admin": "Yönetici (admin)", "manager": "Müdür", "user": "Kullanıcı"}[me["role"]]
+                st.success(f"{sess['full_name']} · {me['company']['name']}\n\n{role}{' · sahip' if me['is_owner'] else ''}")
+                if st.button("Çıkış yap"):
+                    try:
+                        ApiClient(base, token=token).logout()
+                    except ApiError:
+                        pass
+                    st.session_state.pop("user_session", None)
+                    st.rerun()
+        elif tenant_id == MANUAL_TENANT:
             tenant_id = st.text_input("Tenant ID (etiket)", value="manuel").strip() or "manuel"
             key = st.text_input("Tenant API anahtarı (X-API-Key)", type="password")
             tenant_departments = list(DEFAULT_DEPARTMENTS)
@@ -328,17 +390,20 @@ def main() -> None:
         )
         st.caption("Tenant yalnızca API anahtarından çözülür; veri erişimi şirketinizle sınırlıdır.")
     if not key:
-        st.info("Başlamak için kenar çubuğuna şirketinizin API anahtarını girin.")
+        st.info("Başlamak için kenar çubuğundan giriş yapın veya şirketinizin API anahtarını girin.")
         return
     st.caption(f"Aktif tenant: **{tenant_id}** · departman: {', '.join(departments) or 'tümü'}")
-    api = ApiClient(base, key)
+    api = ApiClient(base, token=token) if token else ApiClient(base, key)
     t1, t2, t3 = st.tabs(["🤖 Akıllı Kurumsal Asistan", "📁 Doküman Yönetimi", "📊 Canlı Veri Analitiği"])
     with t1:
-        tab_assistant(api, departments, tenant_messages(st.session_state, f"{tenant_id}:{key[-6:]}"))
+        tab_assistant(api, departments, tenant_messages(st.session_state, f"{tenant_id}:{api.identity[-6:]}"))
     with t2:
         tab_documents(api, departments, tenant_departments)
     with t3:
-        tab_analytics(api, departments)
+        if can_analytics:
+            tab_analytics(api, departments)
+        else:
+            st.info("Satış analitiği yalnızca şirket sahibi ve yöneticilere açıktır.")
 
 
 if __name__ == "__main__":

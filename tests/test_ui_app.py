@@ -182,3 +182,42 @@ def test_analytics_tab_renders_table_and_chart_builder(api):
     assert any(df.value.shape == (3, 2) for df in at.dataframe)
     assert "🎛️ Grafiği özelleştir" in [e.label for e in at.expander]
     assert any(s.label == "Y ekseni" and s.value == "ciro" for s in at.selectbox)
+
+
+# ------------------------------------------------------------------ kullanıcı girişi
+SESSION = {
+    "token": "rs_" + "a" * 32 + "." + "b" * 43, "expires_at": "2026-11-22T12:00:00Z",
+    "email": "calisan@ornek.com", "full_name": "Ayşe Yılmaz",
+    "me": {"via": "session", "company": {"id": "7d7c6b2e-0000-4000-8000-0000000000aa", "slug": "ornek-holding",
+           "name": "Örnek Holding"}, "user_id": None, "membership_id": None, "role": "user", "is_owner": False,
+           "departments": ["İK"]},
+}
+
+
+def test_user_login_uses_bearer_token_and_hides_analytics(api, monkeypatch):
+    _, seen = api
+    logins: list[dict] = []
+
+    def fake_post(url, json=None, timeout=None, **kw):  # noqa: ANN001, ANN202, A002
+        logins.append(json)
+        return httpx.Response(200, json=SESSION, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    at = new_app(secrets=None)
+    from ui.streamlit_app import LOGIN_TENANT
+
+    at.sidebar.selectbox[0].set_value(LOGIN_TENANT).run()
+    assert len(at.tabs) == 0  # giriş yapılmadan sekme yok
+    inputs = {t.label: t for t in at.sidebar.text_input}
+    inputs["Şirket kısa adı"].input("ornek-holding")
+    inputs["E-posta"].input("calisan@ornek.com")
+    inputs["Parola"].input("Guclu-Parola-2026!")
+    at.sidebar.button[0].click().run()
+    assert not at.exception, at.exception
+    assert logins == [{"email": "calisan@ornek.com", "password": "Guclu-Parola-2026!", "company_slug": "ornek-holding"}]
+    assert len(at.tabs) == 3
+    docs_call = [s for s in seen if s["path"] == "/api/v1/documents"][-1]
+    assert docs_call["headers"] == {"Authorization": f"Bearer {SESSION['token']}"}
+    assert any("yalnızca şirket sahibi ve yöneticilere" in i.value for i in at.info)
+    assert at.sidebar.multiselect[0].options == ["İK"]
+    assert SESSION["token"] not in " ".join(m.value for m in at.markdown)  # belirteç ekrana yazılmaz
