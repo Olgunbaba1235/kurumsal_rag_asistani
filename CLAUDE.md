@@ -105,6 +105,21 @@ Doğrulanmamış / bilinen açıklar:
   `tests/test_deployment.py`). `landing/index.html` statik tanıtım sayfası (CONFIG: demo URL + iletişim e-postası),
   `pazarlama/` lansman metinleri.
 
+## Faz 2 – kimlik ve yetki (dal `faz2/kimlik-rbac`, main'e birleşmedi)
+
+- Teknik plan ve 8 güvenlik kontrolü: Claude Docs "Kurumsal RAG Pro – Faz 2 Teknik Denetim ve Uygulama Planı".
+- Migration 0003: `users` (RLS'siz), `memberships`/`invitations`/`user_sessions` (FORCE RLS) + belge
+  tablolarında `department_scope` (RESTRICTIVE). `app.departments`: JSON dizi veya `'*'`; ayar yoksa belge görünmez.
+  Başta ön kontrol: departmanı şirket listesinde olmayan belge varsa durur. **Üretimde henüz uygulanmadı.**
+- `app/core/{passwords,tokens,permissions}.py`: scrypt; `rs_/ri_<tenant hex>.<gizli>` belirteçleri (yalnızca SHA-256
+  saklanır); rol matrisi (tek kaynak, `tests/test_auth_core.py` plandaki tabloyla birebir).
+- `app/services/auth_service.py` + `/api/v1/auth/*`, `/api/v1/company/*`. `get_principal`: Bearer veya `X-API-Key`
+  (ikisi birden 400). `TenantContext.departments` = izinli departmanlar; servisler `tenant_session(tenant.id,
+  tenant.departments)` çağırır. Tanımsız departman 422, yetkisiz 403 (`DepartmentForbiddenError`).
+- Satış analitiği yalnızca owner/admin; `/agent/query` diğer rollerde DOCUMENT_ONLY'ye zorlanır.
+- CI: `.github/workflows/tests.yml` (PGlite dahil tam paket, `REQUIRE_PGLITE=1` → API testleri atlanamaz).
+- B2B arayüz: "🔐 Kullanıcı girişi" modu (Bearer); API anahtarı profilleri aynen çalışır.
+
 ## Sıradaki adım
 
 1. **Docker ile gerçek uçtan uca test:** kullanıcı `wsl --install` + Docker Desktop kurduktan sonra
