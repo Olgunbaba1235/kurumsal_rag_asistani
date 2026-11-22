@@ -1,0 +1,47 @@
+# Tam test paketi: çekirdek + vitrin + ajan + API (PGlite üzerinde gerçek PostgreSQL + pgvector).
+# PR kapısı: bu iş kırmızıysa PR açılmaz / birleştirilmez. API ve izolasyon testleri
+# atlanamaz (REQUIRE_PGLITE=1 → PGlite yoksa test başarısız olur, "geçti" sayılmaz).
+name: tests
+
+on:
+  push:
+    branches: ["faz2/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      REQUIRE_PGLITE: "1"
+      # Gerçek Gemini çağrısı yapılmaz: anahtar yok, testler sahte/çevrimdışı sağlayıcı kullanır
+      GOOGLE_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/pglite/package-lock.json
+      - name: Bağımlılıklar
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+          npm ci --prefix tests/pglite
+      - name: pytest (tam paket)
+        run: python -m pytest -rs -q

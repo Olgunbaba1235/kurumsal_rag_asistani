@@ -19,6 +19,11 @@ router = APIRouter()
 async def agent_query(body: AgentQuery, tenant: CurrentTenant, container: Container) -> AgentResponse:
     """Sorunun niyetini (`DOCUMENT_ONLY`, `SQL_ONLY`, `HYBRID`) belirler, uzman ajanları paralel çalıştırır
     ve sonuçları tek bir kurumsal analiz raporunda sentezler. Tüm veri erişimi tenant ile sınırlıdır."""
+    if len(body.question) > container.settings.max_question_chars:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"Soru en fazla {container.settings.max_question_chars} karakter olabilir.",
+        )
     try:
         departments = tenant.resolve_departments(body.departments)
     except DepartmentNotAllowedError as exc:

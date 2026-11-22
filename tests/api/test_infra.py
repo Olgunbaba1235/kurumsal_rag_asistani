@@ -55,7 +55,8 @@ def test_api_keys_are_random_and_hashed():
 def test_settings_require_key_for_gemini_outside_tests():
     with pytest.raises(ValueError, match="GOOGLE_API_KEY"):
         ApiSettings(ENVIRONMENT="production", EMBEDDING_PROVIDER="gemini", _env_file=None)
-    ApiSettings(ENVIRONMENT="production", EMBEDDING_PROVIDER="hashing", LLM_PROVIDER="none", _env_file=None)
+    ApiSettings(ENVIRONMENT="production", EMBEDDING_PROVIDER="hashing", LLM_PROVIDER="none", _env_file=None,
+                DATABASE_URL="postgresql+asyncpg://rag_app:uretim-parolasi@db:5432/rag")
 
 
 def test_session_role_must_be_identifier():

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import socket
@@ -68,7 +69,11 @@ def _free_port() -> int:
 def pg_url() -> Iterator[str]:
     node = shutil.which("node")
     if node is None or not (PGLITE_DIR / "node_modules").exists():
-        pytest.skip("Entegrasyon testleri için Node.js ve `npm install --prefix tests/pglite` gerekli.")
+        msg = "Entegrasyon testleri için Node.js ve `npm install --prefix tests/pglite` gerekli."
+        # CI ve PR kapısı: izolasyon testleri sessizce atlanırsa "geçti" sayılmaz
+        if os.environ.get("REQUIRE_PGLITE") == "1":
+            pytest.fail(msg, pytrace=False)
+        pytest.skip(msg)
     port = _free_port()
     proc = subprocess.Popen(
         [node, "server.mjs", str(port)],

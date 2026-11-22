@@ -15,6 +15,8 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from src.config import Settings
 
 _IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+# Yalnızca yerel geliştirme içindir; üretimde bu parolalarla açılış reddedilir
+_DEV_PASSWORDS = ("rag_app_password", "rag_admin_password")
 
 
 class ApiSettings(Settings):
@@ -85,6 +87,18 @@ class ApiSettings(Settings):
                 "GOOGLE_API_KEY tanımlı değil. Gemini kullanmak için anahtarı ekleyin ya da geliştirme için "
                 "EMBEDDING_PROVIDER=hashing ve LLM_PROVIDER=none ayarlayın."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_production_secrets(self) -> ApiSettings:
+        if self.environment != "production":
+            return self
+        urls = [self.database_url, self.database_migration_url or ""]
+        if any(f":{pw}@" in u for u in urls for pw in _DEV_PASSWORDS):
+            raise ValueError("Üretimde geliştirme parolasıyla veritabanı bağlantısı kullanılamaz (DATABASE_URL).")
+        admin = self.admin_api_key.get_secret_value() if self.admin_api_key else ""
+        if admin and (len(admin) < 32 or admin.startswith("change-me")):
+            raise ValueError("Üretimde ADMIN_API_KEY en az 32 karakterlik rastgele bir değer olmalıdır.")
         return self
 
     @property

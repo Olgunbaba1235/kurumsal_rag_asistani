@@ -396,7 +396,8 @@ class TextToSQLService:
                 break
             except UnsafeSQLError as exc:
                 attempt.error = f"Güvenlik doğrulaması: {exc}"
-                logger.warning("[%s] Güvensiz SQL reddedildi: %s", tenant.slug, exc)
+                # Log'a yalnızca ret nedeni yazılır; sorgu metni müşteri verisi içerebilir
+                logger.warning("[%s] Güvensiz SQL reddedildi: %s", tenant.slug, str(exc).split(":")[0][:80])
             except (DBAPIError, SQLAlchemyError) as exc:
                 msg = str(getattr(exc, "orig", exc)).splitlines()[0][:300]
                 attempt.error = f"Veritabanı hatası: {msg}"

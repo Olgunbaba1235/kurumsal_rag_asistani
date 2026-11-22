@@ -77,6 +77,10 @@ def create_app(settings: ApiSettings | None = None, container_factory: Container
         version=__version__,
         description=DESCRIPTION,
         lifespan=lifespan,
+        # Üretimde etkileşimli dokümantasyon ve şema herkese açık sunulmaz
+        docs_url=None if settings.environment == "production" else "/docs",
+        redoc_url=None if settings.environment == "production" else "/redoc",
+        openapi_url=None if settings.environment == "production" else "/openapi.json",
         openapi_tags=[
             {"name": "Sağlık", "description": "Servis ve bağımlılık durumu"},
             {"name": "Belgeler", "description": "Belge yükleme, listeleme ve silme (tenant + departman kapsamlı)"},
@@ -116,6 +120,9 @@ def create_app(settings: ApiSettings | None = None, container_factory: Container
 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, str]:
-        return {"service": settings.app_name, "version": __version__, "docs": "/docs"}
+        info = {"service": settings.app_name, "version": __version__}
+        if settings.environment != "production":
+            info["docs"] = "/docs"
+        return info
 
     return app
