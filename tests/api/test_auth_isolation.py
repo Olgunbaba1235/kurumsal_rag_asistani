@@ -163,7 +163,9 @@ def test_3_user_sees_only_assigned_department(client, w):
     assert client.get(f"{API}/documents", params={"department": "Finans"}, headers=bearer(w["user"])).status_code == 403
     body = client.post(f"{API}/chat/query", json={"question": f"Yıllık bütçe onayı ve {SECRET_FIN}?"},
                        headers=bearer(w["user"])).json()
-    assert "Finans_Butce.md" not in evidence_sources(body) and SECRET_FIN not in str(body)
+    # Gizli kod soruda geçtiği için yanıtın soru alanında görünür; içerik alanlarında görünmemeli
+    leaked = [body["answer"], *map(str, body["citations"]), *(e["text"] for e in body["evidence"])]
+    assert "Finans_Butce.md" not in evidence_sources(body) and not any(SECRET_FIN in x for x in leaked)
     me = client.get(f"{API}/auth/me", headers=bearer(w["user"])).json()
     assert me["departments"] == ["İK"] and me["role"] == "user"
 
@@ -180,7 +182,8 @@ def test_5_manager_limited_to_own_department(client, w):
     fin = w["docs"]["Finans_Butce.md"]
     assert client.delete(f"{API}/documents/{fin}", headers=bearer(w["manager"])).status_code == 404
     assert client.get(f"{API}/documents/{fin}", headers=bearer(w["owner"])).status_code == 200
-    r = upload(client, w["manager"], "IK_Ek.md", "# Ek\n\nEk izin kuralı.", "İK")
+    r = upload(client, w["manager"], "IK_Ek.md",
+               "# Ek İzin\n\nDoğum günü izni bir iş günüdür ve yöneticinin onayıyla kullanılır.", "İK")
     assert r.status_code == 201, r.text
     assert client.delete(f"{API}/documents/{r.json()['document']['id']}", headers=bearer(w["manager"])).status_code == 204
 
