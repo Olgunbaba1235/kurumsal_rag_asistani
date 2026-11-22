@@ -44,4 +44,4 @@ jobs:
           pip install -e .
           npm ci --prefix tests/pglite
       - name: pytest (tam paket)
-        run: python -m pytest -rs -q
+        run: python -m pytest -rs -p no:randomly -o addopts="" --tb=short
