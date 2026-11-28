@@ -257,6 +257,57 @@ def test_timeout_switches_to_fast_model_without_waiting_again(fake_genai):
     assert calls["models"] == [MAIN, FAST]  # ana model ikinci kez 30 sn beklenmez
 
 
+def _foreign_error(module: str, *names: str) -> type[Exception]:
+    """Kurulu olmayan bir HTTP kütüphanesinin (ör. google-genai 3.x'in kullandığı httpx2) istisna hiyerarşisi."""
+    base: type[Exception] = Exception
+    for name in names:
+        base = type(name, (base,), {"__module__": module})
+    return base
+
+
+def test_timeouts_and_network_errors_of_any_http_library_are_recognized():
+    from src.llm import is_network_error, is_timeout_error
+
+    read2 = _foreign_error("httpx2._exceptions", "HTTPError", "TransportError", "TimeoutException", "ReadTimeout")
+    assert is_timeout_error(read2("timed out")) and is_network_error(read2("timed out"))
+    conn2 = _foreign_error("httpx2._exceptions", "HTTPError", "TransportError", "NetworkError", "ConnectError")
+    assert is_network_error(conn2("refused")) and not is_timeout_error(conn2("refused"))
+    aio = _foreign_error("aiohttp.client_exceptions", "ClientError", "ClientConnectionError", "ServerDisconnectedError")
+    assert is_network_error(aio()) and not is_timeout_error(aio())
+    assert is_timeout_error(TimeoutError()) and is_network_error(ConnectionResetError())
+    # Uygulama hataları ağ hatası sayılmaz (tekrar denenmez, gizlenmez)
+    assert not is_network_error(ValueError("x")) and not is_network_error(KeyError("x"))
+    assert not is_timeout_error(_foreign_error("benim_modulum", "ReadTimeout")("x"))
+
+
+def test_httpx2_timeout_falls_back_and_connect_error_is_retried(fake_genai):
+    read2 = _foreign_error("httpx2._exceptions", "TransportError", "TimeoutException", "ReadTimeout")
+    llm, calls = _llm([[read2("The read operation timed out")], ["hızlı"]])
+    assert list(llm.stream([("user", "soru")])) == ["hızlı"] and calls["models"] == [MAIN, FAST]
+    conn2 = _foreign_error("httpx2._exceptions", "TransportError", "NetworkError", "ConnectError")
+    llm, calls = _llm([[conn2("refused")], ["tamam"]])
+    assert list(llm.stream([("user", "soru")])) == ["tamam"] and calls["models"] == [MAIN, MAIN]
+
+
+def test_unexpected_sdk_errors_become_non_retryable_llm_errors(fake_genai):
+    """Yeni SDK sürümünde değişen yanıt yapısı vb. ham istisna olarak sohbeti çökertmez; ağ hatası gibi de
+    tekrar denenmez veya yedek modele geçmez."""
+    llm, calls = _llm([[KeyError("candidates")], ["olmamalı"]])
+    with pytest.raises(LLMError) as exc:
+        list(llm.stream([("user", "soru")]))
+    assert calls["models"] == [MAIN] and not exc.value.retryable and "beklenmeyen" in exc.value.user_message
+
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        ok: bool
+
+    llm, calls = _llm([TypeError("schema"), '{"ok": true}'])
+    with pytest.raises(LLMError) as exc:
+        llm.generate_json("p", Out)
+    assert calls["json"] == 1 and not exc.value.retryable and "oluşturulamadı" in exc.value.user_message
+
+
 def test_rate_limit_does_not_switch_models(fake_genai):
     llm, calls = _llm([[_APIError(429)]] * 3 + [["olmamalı"]])
     with pytest.raises(LLMError) as exc:

@@ -13,9 +13,12 @@
 | **Belge işleme** | PDF (pdfplumber; tablolar Markdown'a), DOCX (başlık + tablo + sayfa sonları), XLSX (her sekme bir sayfa), TXT/MD. Tabloyu satır ortasından bölmeyen, başlık satırını tekrarlayan akıllı chunking |
 | **Hibrit arama** | pgvector kosinüs (HNSW) + BM25Plus (Türkçe normalizasyon, F5 kök) → ağırlıklı **RRF** füzyonu → **reranking** (Gemini, hata halinde IDF ağırlıklı sözcüksel yedek) |
 | **Sorgu genişletme** | Sohbet geçmişine duyarlı yeniden yazma (takip soruları → bağımsız sorgu) + 2 arama varyantı |
+| **"Bunu mu sormak istediniz?"** | Kullanıcının **erişebildiği** belgelerin adları, departmanları ve başlıklarıyla bağlamlanan öneri: yazım hatasında tek düzeltme (`yıllık izn` → `yıllık izin`), belirsiz soruda (`izin`, `fatura`, `masraf formu`) 2–3 tıklanabilir niyet. Ana aramayla **eşzamanlı**; net soruda model hiç çağrılmaz; modelsiz/hata halinde Türkçe eke duyarlı sezgisel yedek |
+| **Dayanıklılık** | İstek başına zaman aşımı (`LLM_TIMEOUT_SECONDS`, LLM + embedding) · 429/5xx için üstel bekleme · 503/"overloaded"/zaman aşımında `fast_model`'e geçiş · SDK şema/istek hataları tekrar denenmeyen Türkçe hataya çevrilir; yeniden yazma, rerank, öneri ve Denetçi sezgisel yedeğe düşer |
 | **Katı bağlam** | Alaka kapısı (eşik altında LLM çağrılmaz) · katı sistem talimatı · uydurma atıfların ayıklanması · bilgi yoksa: *"Yüklenen kurumsal dokümanlarda bu bilgi yer almamaktadır."* |
 | **Yanıt sözleşmesi** | Satır içi `[Dosya Adı - Sayfa X]` atıfları, kanıt metinleri, güven skoru (%), adım adım süreler (ms) |
 | **Çok kiracılık** | API anahtarından türetilen tenant + uygulama filtresi + **PostgreSQL Row-Level Security** + bileşik FK (bkz. aşağı) |
+| **Kimlik ve yetki** | Kullanıcı hesapları (scrypt), davetler, oturumlar (`Bearer`), rol matrisi (owner/admin/manager/user) ve **departman kapsamı** (RLS `department_scope`, RESTRICTIVE) — arama, öneri ve önbellek kullanıcının departmanlarıyla sınırlıdır |
 | **Operasyon** | Arka planda belge işleme, atomik sürüm değiştirme, tenant başına rate limit (Redis), health check, request-id, Alembic migration'ları |
 
 ## 🏗️ Mimari
@@ -55,7 +58,11 @@ tests/                      # API testleri gerçek PostgreSQL (PGlite) üzerinde
 3. **Veritabanı (RLS):** `documents` ve `document_chunks` üzerinde `ENABLE` + `FORCE ROW LEVEL SECURITY`. Her transaction başında `set_config('app.tenant_id', …, true)` otomatik uygulanır (SQLAlchemy `after_begin`) ve transaction bitince sıfırlanır. Ayar yoksa hiçbir satır görünmez (**fail-closed**).
 4. **Rol ayrımı:** Uygulama `rag_app` rolüyle bağlanır (`NOSUPERUSER NOBYPASSRLS`); migration'lar ayrı sahip rolle çalışır.
 5. **Şema:** Parçalar `(document_id, tenant_id)` bileşik FK ile belgeye bağlıdır — bir parçanın tenant'ı belgesininkinden farklı olamaz.
-6. **Önbellek:** BM25 indeks anahtarı tenant_id içerir; indeksler tenant'lar arasında paylaşılmaz.
+6. **Önbellek:** BM25 indeks anahtarı tenant_id + departman kümesi içerir; indeksler tenant'lar arasında paylaşılmaz.
+7. **Öneri katmanı:** "Bunu mu sormak istediniz?" ipucu yalnızca kullanıcının departman kapsamındaki (RLS'li oturumla
+   okunan) BM25 indeksinden kurulur; öneri önbelleğinin anahtarı `(tenant, departmanlar, indeks parmak izi, soru)`
+   olduğundan geniş yetkili bir kullanıcının önerisi dar yetkiliye dönmez. Modelin ürettiği öneri kapsam dışı bir
+   dosya adı içeriyorsa atılır (`tests/api/test_suggestion_api.py`).
 
 Testler bu katmanları ayrı ayrı doğrular — RLS testleri **uygulama filtresi olmadan ham SQL** çalıştırır.
 
@@ -97,11 +104,32 @@ uvicorn app.main:create_app --factory --reload
 | POST | `/api/v1/documents/upload` | Çok parçalı yükleme (`file`, `department`, `?wait=`) → 202 / 201 / 200 duplicate |
 | GET | `/api/v1/documents` | Listeleme (`department`, `status`, `limit`, `offset`) |
 | GET / DELETE | `/api/v1/documents/{id}` | Durum / silme |
-| POST | `/api/v1/chat/query` | Soru → yanıt + atıflar + kanıtlar + güven + süreler |
+| POST | `/api/v1/auth/register` · `/login` · `/accept-invitation` · `/logout` · GET `/me` | Şirket kaydı, giriş (Bearer oturum), davet kabulü |
+| GET / POST / PATCH | `/api/v1/company/members` · `/invitations` | Üye ve davet yönetimi (rol + departman atama) |
+| POST | `/api/v1/chat/query` | Soru → yanıt + atıflar + kanıtlar + güven + süreler + `suggestion` ("Bunu mu sormak istediniz?") |
 | POST | `/api/v1/analytics/query` | **Birleşik analitik:** doküman (RAG) + satış verisi (Text-to-SQL) tek yanıtta |
 | GET | `/api/v1/analytics/schema` | Sorgulanabilir tablolar ve sütunlar |
 | POST | `/api/v1/analytics/demo-data` | Kendi tenant'ınız için gerçekçi B2B satış verisi (`ENABLE_DEMO_DATA`) |
 | POST | `/api/v1/admin/tenants` | Tenant oluşturma (`X-Admin-Key`) |
+
+### "Bunu mu sormak istediniz?" sözleşmesi
+
+```jsonc
+// POST /api/v1/chat/query   {"question": "izin", "suggest": true}
+"suggestion": {
+  "has_suggestion": true,
+  "kind": "ambiguous",                       // "typo" → tek düzeltme, alternatives boş
+  "suggested_query": "Yıllık Ücretli İzin ile ilgili kurallar nelerdir?",
+  "alternatives": ["Yıllık Ücretli İzin ile ilgili kurallar nelerdir?",
+                   "Hastalık İzni ile ilgili kurallar nelerdir?",
+                   "Mazeret ve Özel İzinler ile ilgili kurallar nelerdir?"]
+}
+```
+
+* Öneri yoksa `suggestion: null`. Öneri ana RAG akışıyla eşzamanlı üretilir; yanıt hazır olduğunda en fazla
+  `SUGGESTION_WAIT_SECONDS` (varsayılan 1,5 sn) beklenir, gelmezse atlanır — yanıt gecikmez.
+* Kullanıcı bir öneriyi seçip tekrar soruyorsa istemci `"suggest": false` gönderir (öneri → öneri döngüsü olmaz).
+* Departmanı olmayan kullanıcıda, 300 karakterden uzun soruda ve `QUERY_SUGGESTIONS=false` iken öneri üretilmez.
 
 ## 📊 Text-to-SQL analitik ajanı
 
@@ -131,8 +159,15 @@ npm install --prefix tests/pglite   # bir kez: gömülü PostgreSQL + pgvector (
 pytest
 ```
 
-* `tests/api/` — REST API, tenant izolasyonu (API + servis + RLS), belge yaşam döngüsü, katı bağlam. Docker gerektirmez; Node.js yoksa otomatik atlanır.
-* `tests/test_*.py` — belge işleme, chunking, hibrit arama, RAG motoru (ağ gerektirmez).
+* `tests/api/` — REST API, tenant izolasyonu (API + servis + RLS), kimlik/rol/departman yetkileri, belge yaşam
+  döngüsü, katı bağlam, öneri katmanında RBAC (`test_suggestion_api.py`). Docker gerektirmez; Node.js yoksa
+  otomatik atlanır (CI'da `REQUIRE_PGLITE=1` ile atlanamaz).
+* `tests/test_*.py` — belge işleme, chunking, hibrit arama, RAG motoru, öneri motoru (`test_query_suggestion.py`:
+  kapsam ipucu, yazım/niyet sezgileri, önbellek yalıtımı, eşzamanlılık, AppTest ile döngü önleme) (ağ gerektirmez).
+* `tests/test_gemini_contract.py` — **gerçek `google-genai` SDK'sı** ile sözleşme testleri: `httpx` taşıma katmanı
+  taklit edilir, SDK'nın şema dönüştürme, SSE akışı ve hata eşleme kodu çalışır (503 → fast_model, zaman aşımı,
+  429, 400, embedding ve zaman aşımı yapılandırması).
+* CI (`.github/workflows/tests.yml`): `faz2/**` dallarına push ve `main`'e PR'da tam paket.
 
 ## 🖥️ Streamlit vitrin arayüzü (tek komut)
 
@@ -150,6 +185,9 @@ streamlit run app.py              # http://localhost:8501
 * Her tarayıcı oturumu ve her tenant kendi indeksini kullanır; yüklenen belgeler kalıcı değildir.
 * Departman filtresi varsayılan olarak boştur (tüm departmanlar). Filtre yüzünden reddedilen soruda neden açıkça
   yazılır, filtre dışındaki belgelerde ön kontrol yapılır ve tek tıkla filtresiz yeniden sorulabilir.
+* **"Bunu mu sormak istediniz?"**: yazım hatalı soruda yanıtın üstünde düzeltilmiş soru ve "🔁 Önerilen soruyla sor"
+  butonu; belirsiz soruda (`izin`, `masraf formu`) belge başlıklarından 2–3 niyet butonu. Öneri aramayla paralel
+  çalışır, departman filtresine uyar; öneriden, örnek sorulardan ve demodan gelen sorular yeniden denetlenmez.
 * Bileşik sorular ("X nasıl hesaplanır ve Y nedir?") alt sorulara ayrılır: dokümanda karşılığı olan kısım kaynaklı
   yanıtlanır, olmayan kısım için "dokümanlarda yer almamaktadır" notu düşülür. "dk"/"dakika", "sa"/"saat" gibi
   kısaltmalar aramada eşdeğerdir.

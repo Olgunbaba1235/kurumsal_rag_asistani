@@ -1,13 +1,16 @@
-"""Gerçek `google-genai` SDK'sı ile sözleşme testleri (ağa çıkılmaz).
+"""Gerçek `google-genai` SDK'sı ile sözleşme testleri (gerçek ağa çıkılmaz).
 
-`httpx.Client.send` taklit edilir; SDK'nın istek kurma (şema dönüştürme, yapılandırma, URL), yanıt çözme (JSON,
-SSE akışı) ve hata eşleme (APIError → kod) kodu GERÇEKTEN çalışır. Böylece sahte `google.genai` modülüyle yazılan
-birim testlerinin (tests/test_robustness.py) varsaydığı davranış, kurulu SDK sürümüne karşı doğrulanır:
+SDK, `HttpOptions.base_url` ile bu dosyanın başlattığı **yerel bir HTTP sunucusuna** yönlendirilir. Böylece
+SDK'nın istek kurma (şema dönüştürme, yapılandırma, URL), taşıma katmanı (google-genai 3.x `httpx2`, eski
+sürümler `httpx` — hangisi kuruluysa), yanıt çözme (JSON, SSE akışı) ve hata eşleme kodu GERÇEKTEN çalışır;
+sahte `google.genai` modülüyle yazılan birim testlerinin (tests/test_robustness.py) varsayımları kurulu SDK
+sürümüne karşı doğrulanır:
 
 * Tüm yapısal çıktı şemaları SDK tarafından kabul edilir; yanıt şemasında ``default`` ilan edilmez.
 * 503 / "overloaded" / zaman aşımı → fast_model'e geçiş; 429 tekrar denenir ama model değişmez; 400 hemen döner.
 * Akış (SSE) parçaları sırayla gelir; ilk parçadan önce 503 → yanıt fast_model'den akar.
-* İstek zaman aşımı (`LLM_TIMEOUT_SECONDS`) hem LLM hem embedding istemcisine gerçekten uygulanır.
+* İstek zaman aşımı (`LLM_TIMEOUT_SECONDS`) LLM ve embedding istemcisinde gerçekten uygulanır ve hangi HTTP
+  kütüphanesinden gelirse gelsin "zaman aşımı" olarak sınıflanır.
 * SDK istek kuramazsa (ValueError/TypeError) tekrar denenmeyen `LLMError` olur; öneri/yeniden yazma çökmez.
 """
 
@@ -15,73 +18,74 @@ from __future__ import annotations
 
 import importlib
 import json
+import threading
+import time
+from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
 genai = pytest.importorskip("google.genai", reason="google-genai kurulu değil (requirements.txt)")
-httpx = pytest.importorskip("httpx")
 
-from src.embeddings import GeminiEmbedder
+import src.embeddings as embeddings_module
+import src.llm as llm_module
+from src.embeddings import EmbeddingError, GeminiEmbedder
 from src.llm import GeminiLLM, LLMError
 from src.rag_engine import rewrite_query
 from src.search_types import SearchResult
 from src.suggestions import QuerySuggester, build_corpus_hint
 
 MAIN, FAST = "gemini-3.5-flash", "gemini-3.5-flash-lite"
+SHORT_TIMEOUT = 0.5  # sn; "takılan" sunucu yanıtı bundan çok daha geç gelir
+STALL = 3.0
 
 
-# ====================================================================== sahte taşıma katmanı
-def _candidate(text: str) -> dict:
-    return {
-        "candidates": [{"content": {"role": "model", "parts": [{"text": text}]}, "finishReason": "STOP", "index": 0}],
-        "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 2, "totalTokenCount": 5},
-    }
+# ====================================================================== yerel Gemini sunucusu
+@dataclass
+class Recorded:
+    path: str
+    query: dict
+    headers: dict
+    body: bytes
+
+    def json(self) -> dict:
+        return json.loads(self.body or b"{}")
 
 
-def ok_text(text: str):
-    return lambda req: httpx.Response(200, json=_candidate(text), request=req)
+@dataclass
+class Step:
+    status: int
+    payload: bytes
+    content_type: str = "application/json"
+    delay: float = 0.0
 
 
-def ok_json(obj: dict):
-    return ok_text(json.dumps(obj, ensure_ascii=False))
-
-
-def sse(*chunks: str):
-    body = "".join(f"data: {json.dumps(_candidate(c), ensure_ascii=False)}\n\n" for c in chunks).encode()
-    return lambda req: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body, request=req)
-
-
-def error(code: int, status: str, message: str):
-    return lambda req: httpx.Response(
-        code, json={"error": {"code": code, "message": message, "status": status}}, request=req
-    )
-
-
-def timeout():
-    def raise_(req):
-        raise httpx.ReadTimeout("The read operation timed out", request=req)
-
-    return raise_
-
-
-OVERLOADED = error(503, "UNAVAILABLE", "The model is overloaded. Please try again later.")
-
-
+@dataclass
 class Wire:
-    """Kaydedilen istekler + sıradaki yanıt betiği."""
+    """Sunucunun aldığı istekler + sıradaki yanıt betiği."""
 
-    def __init__(self) -> None:
-        self.script: list = []
-        self.requests: list[httpx.Request] = []
+    script: list = field(default_factory=list)
+    requests: list[Recorded] = field(default_factory=list)
+    lock: threading.Lock = field(default_factory=threading.Lock)
 
     def queue(self, *steps) -> Wire:
         self.script.extend(steps)
         return self
 
+    def next(self, req: Recorded) -> Step:
+        with self.lock:
+            self.requests.append(req)
+            if not self.script:
+                return Step(500, json.dumps({"error": {"code": 500, "message": f"beklenmeyen istek {req.path}",
+                                                       "status": "INTERNAL"}}).encode())
+            step = self.script.pop(0)
+        return step(req) if callable(step) else step
+
     @staticmethod
-    def target(req: httpx.Request) -> tuple[str, str]:
-        """(model, yöntem): .../models/gemini-3.5-flash:generateContent → ("gemini-3.5-flash", "generateContent")"""
-        last = req.url.path.rsplit("/", 1)[-1]
+    def target(req: Recorded) -> tuple[str, str]:
+        """(model, yöntem): /v1beta/models/gemini-3.5-flash:generateContent → ("gemini-3.5-flash", "generateContent")"""
+        last = req.path.rsplit("/", 1)[-1]
         model, _, method = last.partition(":")
         return model, method
 
@@ -90,21 +94,103 @@ class Wire:
         return [self.target(r)[0] for r in self.requests]
 
     def body(self, i: int = -1) -> dict:
-        return json.loads(self.requests[i].content or b"{}")
+        return self.requests[i].json()
+
+
+class _Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args) -> None:  # test çıktısını kirletmesin
+        pass
+
+    def _body(self) -> bytes:
+        if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
+            parts = []
+            while True:
+                size = int(self.rfile.readline().split(b";")[0].strip() or b"0", 16)
+                if size == 0:
+                    self.rfile.readline()
+                    return b"".join(parts)
+                parts.append(self.rfile.read(size))
+                self.rfile.readline()
+        n = int(self.headers.get("Content-Length") or 0)
+        return self.rfile.read(n) if n else b""
+
+    def do_POST(self) -> None:
+        url = urlsplit(self.path)
+        req = Recorded(url.path, parse_qs(url.query), {k.lower(): v for k, v in self.headers.items()}, self._body())
+        step = self.server.wire.next(req)
+        if step.delay:
+            time.sleep(step.delay)
+        try:
+            self.send_response(step.status)
+            self.send_header("Content-Type", step.content_type)
+            self.send_header("Content-Length", str(len(step.payload)))
+            self.end_headers()
+            self.wfile.write(step.payload)
+        except OSError:  # istemci zaman aşımıyla bağlantıyı kapattı
+            self.close_connection = True
+
+    do_GET = do_POST
+
+
+@pytest.fixture(scope="module")
+def server():
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    httpd.daemon_threads = True
+    httpd.wire = Wire()
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    httpd.url = f"http://127.0.0.1:{httpd.server_address[1]}"
+    yield httpd
+    httpd.shutdown()
+    httpd.server_close()
 
 
 @pytest.fixture
-def wire(monkeypatch) -> Wire:
-    w = Wire()
+def wire(server, monkeypatch) -> Wire:
+    """SDK'yı yerel sunucuya yönlendirir (zaman aşımı ve tekrar ayarları üretimdeki `http_options`'tan gelir)."""
+    server.wire = w = Wire()
+    real = llm_module.http_options
 
-    def send(client, request, *args, **kwargs):
-        w.requests.append(request)
-        if not w.script:
-            raise AssertionError(f"Beklenmeyen istek: {request.method} {request.url}")
-        return w.script.pop(0)(request)
+    def local(types, timeout):
+        return real(types, timeout).model_copy(update={"base_url": server.url})
 
-    monkeypatch.setattr(httpx.Client, "send", send)
+    monkeypatch.setattr(llm_module, "http_options", local)
+    monkeypatch.setattr(embeddings_module, "http_options", local)
     return w
+
+
+def _candidate(text: str) -> dict:
+    return {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": text}]}, "finishReason": "STOP", "index": 0}],
+        "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 2, "totalTokenCount": 5},
+    }
+
+
+def ok_text(text: str, delay: float = 0.0) -> Step:
+    return Step(200, json.dumps(_candidate(text), ensure_ascii=False).encode(), delay=delay)
+
+
+def ok_json(obj: dict) -> Step:
+    return ok_text(json.dumps(obj, ensure_ascii=False))
+
+
+def sse(*chunks: str) -> Step:
+    body = "".join(f"data: {json.dumps(_candidate(c), ensure_ascii=False)}\r\n\r\n" for c in chunks).encode()
+    return Step(200, body, "text/event-stream")
+
+
+def error(code: int, status: str, message: str) -> Step:
+    return Step(code, json.dumps({"error": {"code": code, "message": message, "status": status}}).encode())
+
+
+def stall() -> Step:
+    """İstemcinin zaman aşımından çok sonra gelen yanıt."""
+    return ok_text("çok geç", delay=STALL)
+
+
+OVERLOADED = error(503, "UNAVAILABLE", "The model is overloaded. Please try again later.")
 
 
 def make_llm(**kwargs) -> GeminiLLM:
@@ -155,6 +241,7 @@ def test_every_structured_output_schema_is_accepted_by_the_sdk(wire, module, nam
 
     model, method = wire.target(wire.requests[0])
     assert (model, method) == (FAST, "generateContent")
+    assert wire.requests[0].headers.get("x-goog-api-key") == "test-key"
     body = wire.body()
     cfg = body["generationConfig"]
     assert cfg["responseMimeType"] == "application/json" and cfg["temperature"] == 0.0
@@ -210,10 +297,21 @@ def test_overloaded_message_without_503_also_falls_back(wire):
 
 
 def test_timeout_switches_to_fast_model_without_waiting_again(wire):
-    llm = make_llm()
-    wire.queue(timeout(), ok_json({"standalone_query": "q", "search_variants": []}))
-    llm.generate_json("x", importlib.import_module("src.rag_engine")._QueryRewrite, fast=False)
-    assert wire.models == [MAIN, FAST]
+    llm = make_llm(timeout=SHORT_TIMEOUT)
+    wire.queue(stall(), ok_json({"standalone_query": "q", "search_variants": []}))
+    t0 = time.perf_counter()
+    out = llm.generate_json("x", importlib.import_module("src.rag_engine")._QueryRewrite, fast=False)
+    assert out.standalone_query == "q" and wire.models == [MAIN, FAST]
+    assert time.perf_counter() - t0 < STALL - 0.5  # istek zaman aşımı gerçekten uygulandı
+
+
+def test_timeout_without_fallback_is_a_turkish_timeout_error(wire):
+    llm = make_llm(timeout=SHORT_TIMEOUT, fallback_to_fast=False)
+    llm.retry_attempts = 1
+    wire.queue(stall())
+    with pytest.raises(LLMError) as info:
+        list(llm.stream([("user", "x")]))
+    assert info.value.timed_out and "zaman aşımı" in info.value.user_message
 
 
 def test_rate_limit_is_retried_but_never_switches_model(wire):
@@ -253,7 +351,7 @@ def test_streaming_parses_sse_chunks_and_sends_history_roles(wire):
     parts = list(llm.stream(history, system="Yalnızca bağlam."))
     assert parts == ["Yıllık izin ", "14 iş ", "günüdür."]
     req = wire.requests[0]
-    assert wire.target(req) == (MAIN, "streamGenerateContent") and req.url.params.get("alt") == "sse"
+    assert wire.target(req) == (MAIN, "streamGenerateContent") and req.query.get("alt") == ["sse"]
     body = wire.body()
     assert [c["role"] for c in body["contents"]] == ["user", "model", "user"]
     assert body["contents"][2]["parts"][0]["text"] == "Yıllık izin kaç gün?"
@@ -269,8 +367,8 @@ def test_stream_overloaded_before_first_token_continues_on_fast_model(wire):
 
 
 def test_stream_timeout_switches_model_once(wire):
-    llm = make_llm()
-    wire.queue(timeout(), sse("tamam"))
+    llm = make_llm(timeout=SHORT_TIMEOUT)
+    wire.queue(stall(), sse("tamam"))
     assert "".join(llm.stream([("user", "x")])) == "tamam"
     assert wire.models == [MAIN, FAST]
 
@@ -283,34 +381,40 @@ def test_turkish_and_long_text_round_trip(wire):
     assert "İŞÇİ ÖĞÜN" in wire.body()["contents"][0]["parts"][0]["text"]
 
 
-# ====================================================================== zaman aşımı yapılandırması
-def _read_timeout(req: httpx.Request) -> float | None:
-    return (req.extensions.get("timeout") or {}).get("read")
+# ====================================================================== embedding
+def _embeddings(req: Recorded) -> Step:
+    body = req.json()
+    n = len(body.get("requests") or body.get("contents") or [body.get("content")])
+    vectors = [{"values": [float(i + 1)] + [0.0] * 3} for i in range(n)]
+    return Step(200, json.dumps({"embeddings": vectors, "embedding": vectors[0]}).encode())
 
 
-def test_request_timeout_reaches_the_http_layer(wire):
-    llm = make_llm(timeout=12.5)
-    wire.queue(ok_text("x"))
-    list(llm.stream([("user", "x")]))
-    assert _read_timeout(wire.requests[0]) == pytest.approx(12.5)
-
-
-def test_embedder_contract_and_timeout(wire):
-    def embeddings(req: httpx.Request) -> httpx.Response:
-        body = json.loads(req.content)
-        n = len(body.get("requests") or body.get("contents") or [body.get("content")])
-        vectors = [{"values": [float(i + 1)] + [0.0] * 3} for i in range(n)]
-        return httpx.Response(200, json={"embeddings": vectors, "embedding": vectors[0]}, request=req)
-
-    emb = GeminiEmbedder("test-key", "gemini-embedding-001", dimension=4, timeout=7.0)
-    wire.queue(embeddings)
+def test_embedder_contract(wire):
+    emb = GeminiEmbedder("test-key", "gemini-embedding-001", dimension=4)
+    wire.queue(_embeddings)
     vecs = emb.embed_documents(["Yıllık izin", "Masraf beyanı"])
     assert vecs == [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]]  # L2 normalize
     model, method = wire.target(wire.requests[0])
     assert model == "gemini-embedding-001" and "mbed" in method
     raw = json.dumps(wire.body(), ensure_ascii=False)
     assert "RETRIEVAL_DOCUMENT" in raw and "Masraf beyanı" in raw
-    assert _read_timeout(wire.requests[0]) == pytest.approx(7.0)
+
+
+def test_embedder_timeout_is_applied_and_retried(wire, monkeypatch):
+    monkeypatch.setattr(llm_module, "backoff_delay", lambda attempt, base: 0.0)
+    emb = GeminiEmbedder("test-key", "gemini-embedding-001", dimension=4, timeout=SHORT_TIMEOUT)
+    wire.queue(stall(), _embeddings)
+    t0 = time.perf_counter()
+    assert emb.embed_query("izin") == [1.0, 0.0, 0.0, 0.0]
+    assert len(wire.requests) == 2 and time.perf_counter() - t0 < STALL - 0.5
+
+
+def test_embedder_errors_are_turkish_embedding_errors(wire):
+    emb = GeminiEmbedder("test-key", "gemini-embedding-001", dimension=4)
+    wire.queue(error(403, "PERMISSION_DENIED", "denied"))
+    with pytest.raises(EmbeddingError) as info:
+        emb.embed_query("izin")
+    assert "denied" not in str(info.value) and len(wire.requests) == 1
 
 
 # ====================================================================== çekirdek bileşenler gerçek SDK ile

@@ -105,21 +105,42 @@ def friendly_error(code: int | None, *, timed_out: bool = False) -> str:
     return f"Yapay zekâ servisi beklenmeyen bir hata döndürdü ({code}). Lütfen tekrar deneyin."
 
 
-def _timeout_errors() -> tuple[type[BaseException], ...]:
-    errors: list[type[BaseException]] = [TimeoutError]
-    try:
-        import httpx
+# HTTP istemci kütüphaneleri sürümden sürüme değişir (google-genai 3.x `httpx2` kullanır; eski sürümler `httpx`,
+# async yol `aiohttp`). İstisnalar sınıf adı + kök modülle tanınır: yeni bir istemci kütüphanesinde de zaman aşımı
+# "servis yoğun" (yedek modele geçiş), bağlantı hatası "ağ hatası" (tekrar dene) olur, ham istisna sızmaz.
+_HTTP_LIBRARIES = frozenset({"httpx", "httpx2", "httpcore", "httpcore2", "aiohttp", "requests", "urllib3"})
+_TIMEOUT_NAMES = frozenset({
+    "TimeoutException", "ReadTimeout", "WriteTimeout", "ConnectTimeout", "PoolTimeout", "Timeout",
+    "ReadTimeoutError", "ConnectTimeoutError", "ServerTimeoutError", "SocketTimeoutError", "ConnectionTimeoutError",
+})
+_NETWORK_NAMES = frozenset({
+    "TransportError", "NetworkError", "ConnectError", "ReadError", "WriteError", "CloseError", "ProtocolError",
+    "RemoteProtocolError", "LocalProtocolError", "ProxyError", "ClientConnectionError", "ClientConnectorError",
+    "ClientOSError", "ClientPayloadError", "ServerDisconnectedError", "ConnectionError", "ChunkedEncodingError",
+    "IncompleteRead", "NewConnectionError", "MaxRetryError",
+})
 
-        errors.append(httpx.TimeoutException)
-    except ImportError:  # pragma: no cover
-        pass
-    return tuple(errors)
+
+def _http_library_classes(exc: BaseException) -> set[str]:
+    return {c.__name__ for c in type(exc).__mro__ if c.__module__.split(".")[0] in _HTTP_LIBRARIES}
+
+
+def is_timeout_error(exc: BaseException) -> bool:
+    """Zaman aşımı mı? (yerleşik TimeoutError veya herhangi bir HTTP kütüphanesinin zaman aşımı sınıfı)"""
+    return isinstance(exc, TimeoutError) or bool(_http_library_classes(exc) & _TIMEOUT_NAMES)
+
+
+def is_network_error(exc: BaseException) -> bool:
+    """Geçici ağ/taşıma hatası mı? (zaman aşımı dahil)"""
+    if isinstance(exc, ConnectionError | TimeoutError):
+        return True
+    return bool(_http_library_classes(exc) & (_TIMEOUT_NAMES | _NETWORK_NAMES))
 
 
 def _classify(exc: BaseException, what: str) -> LLMError:
     """google-genai / ağ istisnasını `LLMError`'a çevirir (zaman aşımı ayrıca işaretlenir)."""
-    if isinstance(exc, _timeout_errors()):
-        return LLMError(f"{what}: zaman aşımı ({exc})", code=None, timed_out=True)
+    if is_timeout_error(exc):
+        return LLMError(f"{what}: zaman aşımı ({type(exc).__name__}: {exc})", code=None, timed_out=True)
     code = getattr(exc, "code", None)
     code = code if isinstance(code, int) and code else None
     return LLMError(f"{what} ({code}): {exc}", code=code)
@@ -130,15 +151,19 @@ def backoff_delay(attempt: int, base_delay: float) -> float:
     return min(base_delay * 2 ** (attempt - 1), MAX_BACKOFF_SECONDS) * (1 + random.random() * 0.25)
 
 
-def _transient_network_errors() -> tuple[type[BaseException], ...]:
-    errors: list[type[BaseException]] = [ConnectionError, TimeoutError]
-    try:
-        import httpx
+def _is_llm_failure(exc: BaseException, api_error: type[BaseException]) -> bool:
+    return isinstance(exc, api_error) or is_network_error(exc)
 
-        errors.append(httpx.TransportError)
-    except ImportError:  # pragma: no cover
-        pass
-    return tuple(errors)
+
+def _unexpected(exc: Exception, what: str) -> LLMError:
+    """SDK'dan beklenmeyen istisna (yeni sürümde değişen yanıt yapısı, şema/istek kurma hatası…): ham istisna
+    sohbeti çökertmez; tekrar denenmeyen, Türkçe mesajlı `LLMError` olur ve iz kaydı loglanır."""
+    if isinstance(exc, ValueError | TypeError):
+        user = "Yapay zekâ servisine gönderilecek istek oluşturulamadı. Yöneticinize bildirin."
+    else:
+        user = "Yapay zekâ servisinden beklenmeyen bir yanıt alındı. Lütfen tekrar deneyin."
+    logger.error("%s: beklenmeyen hata (%s)", what, type(exc).__name__, exc_info=exc)
+    return LLMError(f"{what}: beklenmeyen hata ({type(exc).__name__}: {exc})", retryable=False, user_message=user)
 
 
 def call_with_retry(fn: Callable[[], T], *, attempts: int = 3, base_delay: float = 1.0, what: str = "LLM",
@@ -150,11 +175,12 @@ def call_with_retry(fn: Callable[[], T], *, attempts: int = 3, base_delay: float
     """
     from google.genai import errors
 
-    network = _transient_network_errors()
     for attempt in range(1, attempts + 1):
         try:
             return fn()
-        except (errors.APIError, *network) as exc:
+        except Exception as exc:
+            if not _is_llm_failure(exc, errors.APIError):
+                raise _unexpected(exc, what) from exc
             failure = _classify(exc, f"{what} hatası")
         if not failure.retryable or attempt == attempts or (failure.timed_out and fail_fast_on_timeout):
             raise failure
@@ -286,7 +312,6 @@ class GeminiLLM:
     def _stream_model(self, model: str, contents, config, state: dict) -> Iterator[str]:
         from google.genai import errors
 
-        network = _transient_network_errors()
         fail_fast = self.fallback_to_fast and model != self.fast_model
         for attempt in range(1, self.retry_attempts + 1):
             try:
@@ -297,7 +322,9 @@ class GeminiLLM:
                         state["started"] = True
                         yield chunk.text
                 return
-            except (errors.APIError, *network) as exc:
+            except Exception as exc:
+                if not _is_llm_failure(exc, errors.APIError):
+                    raise _unexpected(exc, "Yanıt üretilemedi") from exc
                 failure = _classify(exc, "Yanıt üretilemedi")
             if (state["started"] or not failure.retryable or attempt == self.retry_attempts
                     or (failure.timed_out and fail_fast)):
@@ -315,16 +342,12 @@ class GeminiLLM:
             response_mime_type="application/json",
             response_schema=schema,
         )
-        try:
-            response = self._call_with_fallback(
-                lambda model: self._client.models.generate_content(model=model, contents=prompt, config=config),
-                self.fast_model if fast else self.model,
-            )
-        except (ValueError, TypeError) as exc:
-            # SDK isteği kuramadı (ör. desteklenmeyen şema alanı): kalıcıdır, tekrar denenmez; çağıran sezgisel
-            # yedeğe düşer (yeniden yazma/rerank/öneri/denetçi sohbeti asla çökertmez)
-            raise LLMError(f"Yapısal çıktı isteği oluşturulamadı: {exc}", retryable=False,
-                           user_message="Yapay zekâ servisine gönderilecek istek oluşturulamadı.") from exc
+        # SDK isteği kuramazsa (ör. desteklenmeyen şema alanı) `call_with_retry` bunu tekrar denenmeyen LLMError'a
+        # çevirir; çağıranlar sezgisel yedeğe düşer (yeniden yazma/rerank/öneri/Denetçi sohbeti çökertmez)
+        response = self._call_with_fallback(
+            lambda model: self._client.models.generate_content(model=model, contents=prompt, config=config),
+            self.fast_model if fast else self.model,
+        )
         try:
             return schema.model_validate_json(response.text or "")
         except ValueError as exc:
