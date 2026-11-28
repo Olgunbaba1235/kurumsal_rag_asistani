@@ -21,6 +21,8 @@ import logging
 import sys
 import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 
 # Proje kökü import yolunun başında: `src.*` ve `ui.*` hangi dizinden/başlatıcıdan çalıştırılırsa çalıştırılsın
@@ -75,7 +77,8 @@ for _attempt in range(3):
         from src.config import get_settings
         from src.document_loader import DocumentProcessingError
         from src.local_engine import OFFLINE_MODE, AnswerInsight, LocalWorkspace
-        from src.rag_engine import QuerySuggestion, RAGResponse
+        from src.rag_engine import RAGResponse
+        from src.suggestions import NO_SUGGESTION, QuerySuggestion
         from ui import showcase_charts as charts
         from ui import showcase_theme as theme
         from ui.citations import number_citations, streaming_view
@@ -109,6 +112,7 @@ CONTRACT_QUESTION = "Bakım sözleşmesinde P1 çözüm süresi aşılırsa hizm
 DEMO_SCRIPT = [*SAMPLE_QUESTIONS, CONTRACT_QUESTION,
                "Şirketin Mars'taki ofisinin adresi nedir?"]  # son soru: halüsinasyon koruması
 FILTER_KEY = "dept_filter"
+MAX_QUESTION_CHARS = 2000  # API ile aynı sınır; çok uzun metin modele/aramaya gönderilmez
 CHAT_KEY = "chat_box"
 ALL_DEPARTMENTS = "Tüm departmanlar"
 
@@ -125,6 +129,8 @@ def _state():  # noqa: ANN202
     ss.setdefault("stream_delay", 0.012)  # yazma efekti (sn/kelime); testlerde 0
     ss.setdefault("demo_delay", 0.6)
     ss.setdefault("auditor_on", True)  # Yüksek Doğruluk (Denetçi Modu) varsayılan açık
+    # Yanıt bittikten sonra hâlâ hazır olmayan öneri için en çok bu kadar beklenir (sn); öneri yanıtı geciktirmez
+    ss.setdefault("suggest_wait", get_settings().suggestion_wait_seconds)
     return ss
 
 
@@ -164,13 +170,16 @@ def messages(tenant: str) -> list[dict]:
 
 
 # ====================================================================== callback'ler (gövdeden önce çalışır)
-def _submit(text: str, departments: list[str] | None = None) -> None:
-    """Soruyu gelen kutusuna yazar. `departments=None` → işlendiği andaki aktif filtre kullanılır."""
+def _submit(text: str, departments: list[str] | None = None, *, accepted: bool = False) -> None:
+    """Soruyu gelen kutusuna yazar. `departments=None` → işlendiği andaki aktif filtre kullanılır.
+
+    `accepted=True`: soru bir öneriden/örnekten geldi ve temiz kabul edilir → "Bunu mu sormak istediniz?"
+    tekrar çalıştırılmaz (öneri → yeni öneri döngüsü oluşmaz)."""
     text = (text or "").strip()
     if text:
         ss = st.session_state
         ss.inbox.append({"id": uuid.uuid4().hex, "tenant": ss.tenant, "text": text,
-                         "departments": departments})
+                         "departments": departments, "accepted": accepted})
 
 
 def _on_chat_submit() -> None:
@@ -363,16 +372,64 @@ def render_audit_report(audit: AuditResult, resp: RAGResponse, insight: AnswerIn
 _MD_SPECIAL = str.maketrans({c: "\\" + c for c in "\\`*_{}[]()<>#+-.!|$~"})
 
 
+def _md(text: str) -> str:
+    """Model/ipucu çıktısı markdown olarak yorumlanmasın."""
+    return (text or "").translate(_MD_SPECIAL)
+
+
+@st.cache_resource(show_spinner=False)
+def _suggest_pool() -> ThreadPoolExecutor:
+    """Öneriler ana aramayla eşzamanlı çalışır; havuz sunucu başına tektir (oturumlar paylaşır)."""
+    return ThreadPoolExecutor(max_workers=4, thread_name_prefix="oneri")
+
+
+def _start_suggestion(ws: LocalWorkspace, question: str, departments: list[str]) -> Future | None:
+    try:
+        return _suggest_pool().submit(ws.suggest, question, list(departments or []))
+    except RuntimeError:  # havuz kapatılmış (sıcak yenileme) → öneri yok
+        return None
+
+
+def _collect_suggestion(future: Future | None, wait: float) -> QuerySuggestion:
+    if future is None:
+        return NO_SUGGESTION
+    try:
+        return future.result(timeout=max(0.0, wait))
+    except FutureTimeout:
+        return NO_SUGGESTION  # yanıtı bekletmeyiz; geç gelen öneri gösterilmez
+    except Exception:  # öneri hiçbir koşulda sohbeti bozmamalı
+        logging.getLogger(__name__).exception("Öneri alınamadı")
+        return NO_SUGGESTION
+
+
+def _suggestion_options(suggestion: object) -> list[str]:
+    """Seçenekler (sıcak yenilemeden kalmış eski öneri nesneleri de tolere edilir)."""
+    if suggestion is None or not getattr(suggestion, "has_suggestion", False):
+        return []
+    options = list(getattr(suggestion, "options", None) or [])
+    return options or [getattr(suggestion, "suggested_query", "")]
+
+
 def render_suggestion(suggestion: QuerySuggestion | None, *, key: str, latest: bool = True) -> None:
-    """"Bunu mu sormak istediniz?" kutusu (cevabın hemen üstünde) + tek tıkla önerilen soruyla yeniden sor."""
-    if suggestion is None or not suggestion.has_suggestion:
+    """"Bunu mu sormak istediniz?" kutusu (cevabın hemen üstünde). Tek öneride düzeltilmiş soru + buton; belirsiz
+    soruda 2–3 tıklanabilir niyet. Butonla gelen soru temiz kabul edilir (yeniden öneri döngüsü yok)."""
+    options = [o for o in _suggestion_options(suggestion) if o]
+    if not options:
         return
-    # Sondaki "?" kalıba eklenir (çift soru işareti olmasın); model çıktısı markdown olarak yorumlanmasın
-    shown = suggestion.suggested_query.rstrip(" ?").translate(_MD_SPECIAL)
-    st.info(f"Bunu mu sormak istediniz: **{shown}**?", icon="💡")
+    if len(options) == 1:
+        # Sondaki "?" kalıba eklenir (çift soru işareti olmasın)
+        st.info(f"Bunu mu sormak istediniz: **{_md(options[0].rstrip(' ?'))}**?", icon="💡")
+        if latest:
+            st.button("🔁 Önerilen soruyla sor", key=f"suggest_{key}_0", on_click=_submit, args=(options[0],),
+                      kwargs={"accepted": True}, help=options[0])
+        return
+    listed = "" if latest else "  \n" + "  \n".join(f"• {_md(o)}" for o in options)
+    st.info("**Bunu mu sormak istediniz?** Sorunuz birden fazla konuya karşılık gelebilir; birini seçin." + listed,
+            icon="🧭")
     if latest:
-        st.button("🔁 Önerilen soruyla sor", key=f"suggest_{key}", on_click=_submit,
-                  args=(suggestion.suggested_query,), help=suggestion.suggested_query)
+        for i, (col, option) in enumerate(zip(st.columns(len(options)), options, strict=True)):
+            col.button(option, key=f"suggest_{key}_{i}", on_click=_submit, args=(option,),
+                       kwargs={"accepted": True}, width="stretch", help=option)
 
 
 def render_answer(msg: dict, *, key: str, delay: float = 0.0, latest: bool = True, text_slot=None) -> None:  # noqa: ANN001
@@ -450,7 +507,7 @@ def render_answer(msg: dict, *, key: str, delay: float = 0.0, latest: bool = Tru
 
 
 def process_submission(tenant: str, ws: LocalWorkspace, question: str, departments: list[str], *,
-                       on_recorded, animate: bool = True) -> None:  # noqa: ANN001
+                       on_recorded, animate: bool = True, accepted: bool = False) -> None:  # noqa: ANN001
     """Yanıtı token token akıtır; akış bitince Denetçi çalışır, sonuç **çizimden önce** tam bir kez kaydedilir,
     ardından rozet, güven ve kaynak kartları akışın altına eklenir."""
     ss = st.session_state
@@ -461,16 +518,28 @@ def process_submission(tenant: str, ws: LocalWorkspace, question: str, departmen
     with st.chat_message("assistant", avatar="🧠"):
         auditing = bool(ss.auditor_on)
         status = st.empty()
-        # "Bunu mu sormak istediniz?": ana aramadan önce hızlı modelle soru denetimi (hata → öneri yok)
-        status.markdown('<div class="meta">🧭 Soru kontrol ediliyor…</div>', unsafe_allow_html=True)
-        suggestion = ws.suggest(question)
-        render_suggestion(suggestion, key=str(len(msgs) + 1))  # kayıttan sonra yanıtın sohbet indeksi
+        # "Bunu mu sormak istediniz?": ana aramayla EŞZAMANLI (ayrı iş parçacığı); öneriden/örnekten gelen soru
+        # temiz kabul edilir. Kutu yanıtın üstündeki yuvaya hazır olduğu anda çizilir.
+        suggestion_future = None if accepted else _start_suggestion(ws, question, departments)
+        suggestion_slot = st.empty()
+        suggestion_key = str(len(msgs) + 1)  # kayıttan sonra yanıtın sohbet indeksi
+        suggestion: QuerySuggestion | None = None
+
+        def show_suggestion_if_ready(wait: float = 0.0) -> None:
+            nonlocal suggestion
+            if suggestion is None and (suggestion_future is None or suggestion_future.done() or wait > 0):
+                suggestion = _collect_suggestion(suggestion_future, wait)
+                if suggestion.has_suggestion:
+                    with suggestion_slot.container():
+                        render_suggestion(suggestion, key=suggestion_key)
+
         text_slot = st.empty()
         status.markdown('<div class="meta">🔎 Kaynaklar aranıyor…</div>', unsafe_allow_html=True)
         pending = ws.start(question, history, departments, audit=auditing)
         delay = ss.stream_delay if animate else 0.0
         shown = ""
         for chunk in pending.tokens:
+            show_suggestion_if_ready()
             if not shown:
                 status.markdown('<div class="meta">✍️ Araştırmacı yanıtı yazıyor…</div>', unsafe_allow_html=True)
             # Model parçaları zaten akar; tek parça gelen (çevrimdışı) yanıtta yazma efekti için kelimelere böl
@@ -484,11 +553,12 @@ def process_submission(tenant: str, ws: LocalWorkspace, question: str, departmen
             status.markdown('<div class="meta">🛡️ Denetçi her iddiayı kaynaklarla karşılaştırıyor…</div>',
                             unsafe_allow_html=True)
         turn = pending.finish()
+        show_suggestion_if_ready(wait=float(ss.suggest_wait))  # öneri hâlâ yoksa kısa bekle, sonra vazgeç
         # Kayıt: finish() ile bu satırlar arasında Streamlit çağrısı yok → rerun burayı bölemez
         msgs.append({"role": "user", "content": question})
         msgs.append({"role": "assistant", "content": turn.audit.answer, "question": question,
                      "response": turn.response, "audit": turn.audit, "insight": turn.insight,
-                     "suggestion": suggestion})
+                     "suggestion": suggestion or NO_SUGGESTION})
         on_recorded()
         status.empty()
         render_answer(msgs[-1], key=str(len(msgs) - 1), text_slot=text_slot)
@@ -505,7 +575,8 @@ def tab_assistant(tenant: str, ws: LocalWorkspace, departments: list[str], kpis:
         st.markdown('<div class="section-title">💡 Hızlı başlangıç — örnek sorular</div>', unsafe_allow_html=True)
         cols = st.columns(len(SAMPLE_QUESTIONS))
         for i, (col, label, q) in enumerate(zip(cols, SAMPLE_LABELS, SAMPLE_QUESTIONS, strict=True)):
-            col.button(label, key=f"sample_{i}", width="stretch", help=q, on_click=_submit, args=(q,))
+            col.button(label, key=f"sample_{i}", width="stretch", help=q, on_click=_submit, args=(q,),
+                       kwargs={"accepted": True})
         if not ws.documents:
             st.info("Bu tenant'ın bilgi tabanı boş. Kenar çubuğundan belge yükleyin veya "
                     f"**{SAMPLE_TENANT}** tenant'ını seçin.", icon="📭")
@@ -521,13 +592,13 @@ def tab_assistant(tenant: str, ws: LocalWorkspace, departments: list[str], kpis:
     for sub in waiting:
         process_submission(tenant, ws, sub["text"],
                            departments if sub["departments"] is None else list(sub["departments"]),
-                           on_recorded=lambda sub=sub: ss.inbox.remove(sub))
+                           on_recorded=lambda sub=sub: ss.inbox.remove(sub), accepted=bool(sub.get("accepted")))
 
     # 2) Canlı demo: çalıştırma başına bir soru (animasyonlu), ardından rerun
     if ss.demo_queue and tenant == SAMPLE_TENANT:
         question = ss.demo_queue[0]
         st.toast(f"🎬 Demo: {question}")
-        process_submission(tenant, ws, question, [], on_recorded=lambda: ss.demo_queue.pop(0))
+        process_submission(tenant, ws, question, [], on_recorded=lambda: ss.demo_queue.pop(0), accepted=True)
         kpis.render()  # demo adımları rerun ile bittiği için KPI burada güncellenir
         if ss.demo_queue:
             time.sleep(ss.demo_delay)
@@ -537,7 +608,8 @@ def tab_assistant(tenant: str, ws: LocalWorkspace, departments: list[str], kpis:
 
     scope = ALL_DEPARTMENTS if not departments else f"{', '.join(departments)} (filtre aktif)"
     st.caption(f"🔎 Arama kapsamı: {scope}")
-    st.chat_input("Kurumsal dokümanlarınıza bir soru sorun…", key=CHAT_KEY, on_submit=_on_chat_submit)
+    st.chat_input("Kurumsal dokümanlarınıza bir soru sorun…", key=CHAT_KEY, on_submit=_on_chat_submit,
+                  max_chars=MAX_QUESTION_CHARS)
 
 
 def tab_analytics(ws: LocalWorkspace) -> None:

@@ -20,7 +20,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from typing import Protocol, TypeVar, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +38,11 @@ class LLMError(Exception):
     """
 
     def __init__(self, message: str, *, code: int | None = None, user_message: str | None = None,
-                 timed_out: bool = False):
+                 timed_out: bool = False, retryable: bool | None = None):
         super().__init__(message)
         self.code = code
         self.timed_out = timed_out
-        self.retryable = is_retryable(code)
+        self.retryable = is_retryable(code) if retryable is None else retryable
         self.user_message = user_message or friendly_error(code, timed_out=timed_out)
 
     @property
@@ -54,6 +54,23 @@ class LLMError(Exception):
     def should_fallback(self) -> bool:
         """Ana model yerine fast_model denenmeli mi? (yoğunluk veya zaman aşımı; 429/4xx değil)"""
         return self.overloaded or self.timed_out
+
+
+def _strip_schema_defaults(schema: dict) -> None:
+    for prop in (schema.get("properties") or {}).values():
+        if isinstance(prop, dict):
+            prop.pop("default", None)
+
+
+class StructuredOutput(BaseModel):
+    """`generate_json` yanıt şemalarının tabanı.
+
+    Gemini API yanıt şemasında ``default`` kabul etmez ("Default value is not supported in the response schema
+    for the Gemini API"); varsayılanlar doğrulamada korunur (eksik alan tolere edilir) ama JSON şemasında
+    ilan edilmez. Tüm yapısal çıktı modelleri bu sınıftan türemelidir (bkz. tests/test_gemini_contract.py).
+    """
+
+    model_config = ConfigDict(json_schema_extra=_strip_schema_defaults)
 
 
 RETRYABLE_CODES = frozenset({408, 429, 500, 502, 503, 504})
@@ -148,6 +165,19 @@ def call_with_retry(fn: Callable[[], T], *, attempts: int = 3, base_delay: float
     raise AssertionError("unreachable")  # pragma: no cover
 
 
+def http_options(types: object, timeout: float) -> object:
+    """İstek başına zaman aşımı (google-genai milisaniye alır). Tekrar denemeyi biz yönetiriz: SDK sürümü
+    kendi tekrar mekanizmasını destekliyorsa tek denemeye sabitlenir (çift tekrar → gecikme katlanmasın)."""
+    kwargs: dict = {"timeout": int(timeout * 1000)}
+    retry_cls = getattr(types, "HttpRetryOptions", None)
+    if retry_cls is not None and "retry_options" in (getattr(types.HttpOptions, "model_fields", None) or {}):
+        try:
+            kwargs["retry_options"] = retry_cls(attempts=1)
+        except (TypeError, ValueError):  # alan adı değişmiş bir SDK sürümü: SDK varsayılanı kalır
+            pass
+    return types.HttpOptions(**kwargs)
+
+
 @runtime_checkable
 class LLM(Protocol):
     def stream(
@@ -175,8 +205,7 @@ class GeminiLLM:
         from google import genai
         from google.genai import types
 
-        # İstek başına üst sınır: google-genai zaman aşımını milisaniye olarak alır
-        self._client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=int(timeout * 1000)))
+        self._client = genai.Client(api_key=api_key, http_options=http_options(types, timeout))
         self.model = model
         self.fast_model = fast_model
         self.temperature = temperature
@@ -286,10 +315,16 @@ class GeminiLLM:
             response_mime_type="application/json",
             response_schema=schema,
         )
-        response = self._call_with_fallback(
-            lambda model: self._client.models.generate_content(model=model, contents=prompt, config=config),
-            self.fast_model if fast else self.model,
-        )
+        try:
+            response = self._call_with_fallback(
+                lambda model: self._client.models.generate_content(model=model, contents=prompt, config=config),
+                self.fast_model if fast else self.model,
+            )
+        except (ValueError, TypeError) as exc:
+            # SDK isteği kuramadı (ör. desteklenmeyen şema alanı): kalıcıdır, tekrar denenmez; çağıran sezgisel
+            # yedeğe düşer (yeniden yazma/rerank/öneri/denetçi sohbeti asla çökertmez)
+            raise LLMError(f"Yapısal çıktı isteği oluşturulamadı: {exc}", retryable=False,
+                           user_message="Yapay zekâ servisine gönderilecek istek oluşturulamadı.") from exc
         try:
             return schema.model_validate_json(response.text or "")
         except ValueError as exc:

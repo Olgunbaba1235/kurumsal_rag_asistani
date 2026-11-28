@@ -31,8 +31,9 @@ from src.document_loader import ProcessedDocument, process_document
 from src.embeddings import HashingEmbedder
 from src.hybrid_retriever import HybridRetriever, LexicalReranker
 from src.llm import GeminiLLM, LLMError, Message
-from src.rag_engine import QuerySuggestion, RAGEngine, RAGResponse, citation_coverage, rewrite_query
+from src.rag_engine import RAGEngine, RAGResponse, citation_coverage, rewrite_query
 from src.search_types import SearchResult
+from src.suggestions import QuerySuggester, QuerySuggestion
 from src.text_utils import fold, tokenize
 
 logger = logging.getLogger(__name__)
@@ -292,9 +293,11 @@ class LocalWorkspace:
         self.store = InMemoryVectorStore(self.settings)
         self.llm, self.mode = self._make_llm(api_key or self.settings.api_key)
         if self.mode == OFFLINE_MODE:
-            # Çevrimdışı özetleyicide yapısal çıktı yok: yeniden yazma ve soru önerisi model çağırmaz
-            self.settings = self.settings.model_copy(update={"query_rewriting": False, "query_suggestions": False})
+            self.settings = self.settings.model_copy(update={"query_rewriting": False})
         self.engine = RAGEngine(HybridRetriever(self.store, LexicalReranker(), self.settings), self.llm, self.settings)
+        if self.mode == OFFLINE_MODE:
+            # Çevrimdışı özetleyicide yapısal çıktı yok: öneriler yalnızca sezgisel (yazım + başlık niyetleri)
+            self.engine.suggester = QuerySuggester(None, enabled=self.settings.query_suggestions)
         # Denetçi: Gemini modunda hızlı Flash modeliyle, aksi halde çevrimdışı kural tabanlı
         self.auditor = GeminiAuditor(self.llm) if self.mode == GEMINI_MODE else RuleBasedAuditor()
         self.history: list[QueryLog] = []
@@ -339,9 +342,10 @@ class LocalWorkspace:
         return sorted(self.store.documents.values(), key=lambda d: d.added_at)
 
     # ------------------------------------------------------------ soru-cevap
-    def suggest(self, question: str) -> QuerySuggestion:
-        """Ana aramadan önce "Bunu mu sormak istediniz?" önerisi (yoksa `has_suggestion=False`)."""
-        return self.engine.suggest(question)
+    def suggest(self, question: str, departments: Sequence[str] | None = None) -> QuerySuggestion:
+        """"Bunu mu sormak istediniz?" önerisi; yalnızca `departments` kapsamındaki belgelerden ipucu alır.
+        Ana aramayla paralel (ayrı iş parçacığında) çağrılabilir; hiçbir hata yükseltmez."""
+        return self.engine.suggest(question, list(departments or []) or None)
 
     def start(self, question: str, history: Sequence[Message] = (),
               departments: Sequence[str] | None = None, *, audit: bool = True) -> PendingTurn:

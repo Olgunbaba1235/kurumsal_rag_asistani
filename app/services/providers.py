@@ -19,7 +19,10 @@ class Providers:
 
 def build_providers(settings: ApiSettings) -> Providers:
     if settings.embedding_provider == "gemini":
-        embedder: Embedder = GeminiEmbedder(settings.api_key, settings.embedding_model, settings.embedding_dimension)
+        embedder: Embedder = GeminiEmbedder(
+            settings.api_key, settings.embedding_model, settings.embedding_dimension,
+            timeout=settings.llm_timeout_seconds,
+        )
     else:
         # Geliştirme/test: ağ gerektirmez, anlamsal değildir
         embedder = HashingEmbedder(dimension=settings.embedding_dimension)

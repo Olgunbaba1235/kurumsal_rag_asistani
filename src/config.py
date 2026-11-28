@@ -69,8 +69,11 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------ Üretim
     query_rewriting: bool = Field(default=True, alias="QUERY_REWRITING")
-    # "Bunu mu sormak istediniz?": aramadan önce fast_llm_model soruyu yazım/belirsizlik için denetler
+    # "Bunu mu sormak istediniz?": ana aramayla EŞZAMANLI çalışır; belge adları/başlıkları/terimleriyle (yalnızca
+    # kullanıcının erişebildiği kapsam) yazım hatası düzeltir, belirsiz soruda 2–3 niyet önerir. Net soruda model
+    # çağrılmaz. Yanıt hazır olduğunda öneri hâlâ gelmediyse en çok `suggestion_wait_seconds` beklenir.
     query_suggestions: bool = Field(default=True, alias="QUERY_SUGGESTIONS")
+    suggestion_wait_seconds: float = Field(default=1.5, ge=0.0, le=30.0, alias="SUGGESTION_WAIT_SECONDS")
     history_turns: int = Field(default=4, ge=0, le=20, alias="HISTORY_TURNS")
 
     # ------------------------------------------------------------ Doğrulama

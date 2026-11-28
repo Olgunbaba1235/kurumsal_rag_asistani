@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
+
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import Container, CurrentTenant
@@ -36,11 +39,29 @@ async def query(body: ChatQuery, tenant: CurrentTenant, container: Container) ->
     except DepartmentNotAllowedError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
-    result = await container.rag.ask(
-        tenant,
-        body.question,
-        departments,
-        [(t.role, t.content) for t in body.history],
-        top_k=body.top_k,
+    # "Bunu mu sormak istediniz?" ana RAG akışıyla EŞZAMANLI; yanıt hazır olduğunda en fazla
+    # SUGGESTION_WAIT_SECONDS beklenir, gelmezse öneri atlanır (yanıt gecikmez)
+    suggestion_task = (
+        asyncio.create_task(container.rag.suggest(tenant, body.question, departments)) if body.suggest else None
     )
-    return ChatResponse.from_result(result, departments)
+    try:
+        result = await container.rag.ask(
+            tenant,
+            body.question,
+            departments,
+            [(t.role, t.content) for t in body.history],
+            top_k=body.top_k,
+        )
+    except BaseException:
+        if suggestion_task is not None:
+            suggestion_task.cancel()
+            with contextlib.suppress(BaseException):
+                await suggestion_task
+        raise
+    suggestion = None
+    if suggestion_task is not None:
+        try:
+            suggestion = await asyncio.wait_for(suggestion_task, container.settings.suggestion_wait_seconds)
+        except asyncio.TimeoutError:  # 3.10'da TimeoutError'dan ayrı sınıf
+            suggestion = None
+    return ChatResponse.from_result(result, departments, suggestion)

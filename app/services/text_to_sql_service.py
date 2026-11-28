@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
@@ -39,7 +39,7 @@ from app.core.db import Database
 from app.models.sql_models import ANALYTICS_TABLES, CUSTOMER_SEGMENTS, ORDER_STATUSES, SALES_CHANNELS
 from app.services.sql_guard import SQLGuard, UnsafeSQLError, ValidatedSQL
 from app.services.tenant_service import TenantContext
-from src.llm import LLM, LLMError, Message
+from src.llm import LLM, LLMError, Message, StructuredOutput
 
 logger = logging.getLogger(__name__)
 
@@ -93,20 +93,20 @@ olarak belirt. 'highlights' alanına en önemli 1-3 bulguyu yaz."""
 
 
 # =============================================================== LLM şemaları
-class ChartHint(BaseModel):
+class ChartHint(StructuredOutput):
     type: Literal["bar", "line", "pie", "table", "none"] = "table"
     x: str | None = None
     y: str | None = None
     title: str | None = None
 
 
-class SQLGeneration(BaseModel):
+class SQLGeneration(StructuredOutput):
     sql: str = Field(default="", description="Tek bir PostgreSQL SELECT sorgusu; yanıtlanamıyorsa boş")
     explanation: str = Field(default="", description="Sorgunun ne hesapladığının kısa Türkçe açıklaması")
     chart: ChartHint = Field(default_factory=ChartHint)
 
 
-class DataSummary(BaseModel):
+class DataSummary(StructuredOutput):
     summary: str
     highlights: list[str] = Field(default_factory=list)
 

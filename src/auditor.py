@@ -21,9 +21,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from src.llm import LLM, LLMError
+from src.llm import LLM, LLMError, StructuredOutput
 from src.rag_engine import NO_INFO_ANSWER, RAGResponse
 from src.text_utils import fold, tokenize
 
@@ -199,7 +199,7 @@ class RuleBasedAuditor:
                            self.name, _ms(t0), checks)
 
 
-class _AuditVerdict(BaseModel):
+class _AuditVerdict(StructuredOutput):
     verdict: Literal["approved", "revised", "rejected"]
     corrected_answer: str = Field(description="Yalnızca kaynakla desteklenen, [Dosya - Sayfa X] atıflı yanıt")
     issues: list[str] = Field(default_factory=list, description="Desteklenmeyen iddialar (kısa)")
@@ -229,7 +229,7 @@ class GeminiAuditor:
         prompt = f"KAYNAK PARÇALARI:\n{context}\n\nYANIT:\n{response.answer}"
         try:
             v = self.llm.generate_json(prompt, _AuditVerdict, system=_AUDIT_SYSTEM, fast=True)
-        except LLMError:
+        except (LLMError, ValueError):
             result = self.rules.audit(response)
             result.summary += " (Gemini denetçiye ulaşılamadı; kural tabanlı doğrulama kullanıldı.)"
             return result

@@ -15,7 +15,7 @@ from typing import Protocol, runtime_checkable
 
 # Modül düzeyinde import: fonksiyon içinden `from src…` yapmak, Streamlit sıcak yenilemesi `src.*`
 # modüllerini sys.modules'tan çıkarırken aynı anda çalışırsa `KeyError: 'src'` üretir.
-from src.llm import LLMError, call_with_retry
+from src.llm import LLMError, call_with_retry, http_options
 from src.text_utils import tokenize
 
 logger = logging.getLogger(__name__)
@@ -69,12 +69,15 @@ class HashingEmbedder:
 class GeminiEmbedder:
     """Google GenAI embedding (belge ve sorgu için ayrı `task_type`)."""
 
-    def __init__(self, api_key: str | None, model: str = "gemini-embedding-001", dimension: int = 768):
+    def __init__(self, api_key: str | None, model: str = "gemini-embedding-001", dimension: int = 768, *,
+                 timeout: float = 30.0):
         if not api_key:
             raise EmbeddingError("GOOGLE_API_KEY tanımlı değil.")
         from google import genai
+        from google.genai import types
 
-        self._client = genai.Client(api_key=api_key)
+        # Asılı kalan embedding isteği aramayı/indekslemeyi süresiz bekletmesin
+        self._client = genai.Client(api_key=api_key, http_options=http_options(types, timeout))
         self.model = model
         self.dimension = dimension
 

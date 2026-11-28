@@ -20,12 +20,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from app.services.rag_service import RAGService
 from app.services.tenant_service import TenantContext
 from app.services.text_to_sql_service import SCHEMA_DESCRIPTION, SQLAnswer, TextToSQLService
-from src.llm import LLM, LLMError, Message
+from src.llm import LLM, LLMError, Message, StructuredOutput
 from src.rag_engine import NO_INFO_ANSWER, RAGResponse
 from src.text_utils import fold
 
@@ -45,7 +45,7 @@ _DOC_HINTS = re.compile(
 )
 
 
-class _RouteDecision(BaseModel):
+class _RouteDecision(StructuredOutput):
     route: Route
     reason: str = Field(description="Kısa Türkçe gerekçe")
 

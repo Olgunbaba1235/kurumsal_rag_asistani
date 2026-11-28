@@ -23,17 +23,18 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 from rank_bm25 import BM25Plus
 
 from src.config import Settings, get_settings
-from src.llm import LLM, LLMError
+from src.llm import LLM, LLMError, StructuredOutput
 from src.search_types import SearchResult
 from src.text_utils import tokenize
 
@@ -165,12 +166,12 @@ class LexicalReranker:
         return sorted(candidates, key=lambda c: (c.rerank_score, c.fused_score), reverse=True)
 
 
-class _PassageScore(BaseModel):
+class _PassageScore(StructuredOutput):
     index: int = Field(description="Pasajın numarası")
     score: int = Field(ge=0, le=10, description="0 = alakasız, 10 = soruyu doğrudan ve tam yanıtlıyor")
 
 
-class _RerankOutput(BaseModel):
+class _RerankOutput(StructuredOutput):
     scores: list[_PassageScore]
 
 
@@ -205,7 +206,7 @@ class LLMReranker:
         prompt = f"SORU: {query}\n\nPASAJLAR:\n{passages}\n\nHer pasaj için 'index' ve 'score' döndür."
         try:
             result = self.llm.generate_json(prompt, _RerankOutput, system=_RERANK_SYSTEM, fast=True)
-        except LLMError as exc:
+        except (LLMError, ValueError) as exc:
             logger.warning("LLM reranking başarısız (%s); sözcüksel reranker kullanılıyor.", exc)
             self.last_used = self.fallback.name
             return self.fallback.rerank(query, candidates, idf)
@@ -282,21 +283,29 @@ class HybridRetriever:
         self.reranker = reranker or LexicalReranker()
         self.variant_weight = variant_weight
         self._bm25_cache: OrderedDict[tuple, BM25Index] = OrderedDict()
+        self._bm25_lock = threading.Lock()
         self._bm25_cache_size = bm25_cache_size
         self.last_timings: dict[str, float] = {}
 
     # ------------------------------------------------------------ BM25 indeks önbelleği
     def _bm25(self, departments: Sequence[str] | None) -> BM25Index:
         key = (tuple(sorted(departments)) if departments else None, self.store.revision)
-        index = self._bm25_cache.get(key)
-        if index is None:
-            index = BM25Index(self.store.get_chunks(list(departments) if departments else None))
-            self._bm25_cache[key] = index
+        # Öneri motoru aramayla paralel (ayrı iş parçacığında) indeks isteyebilir → önbellek kilitli
+        with self._bm25_lock:
+            index = self._bm25_cache.get(key)
+            if index is not None:
+                self._bm25_cache.move_to_end(key)
+                return index
+        index = BM25Index(self.store.get_chunks(list(departments) if departments else None))
+        with self._bm25_lock:
+            index = self._bm25_cache.setdefault(key, index)
             while len(self._bm25_cache) > self._bm25_cache_size:
                 self._bm25_cache.popitem(last=False)
-        else:
-            self._bm25_cache.move_to_end(key)
         return index
+
+    def index_for(self, departments: Sequence[str] | None) -> BM25Index:
+        """Kapsamlı (yalnızca `departments` parçaları) BM25 indeksi; öneri ipucu bundan türetilir."""
+        return self._bm25(departments)
 
     # ------------------------------------------------------------ tekil kollar
     def vector_search(self, query: str, departments: Sequence[str] | None, top_n: int) -> list[SearchResult]:

@@ -11,6 +11,7 @@ halüsinasyon kapısı) `src.rag_engine` ile ortaktır. Burada:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Sequence
 
@@ -26,6 +27,9 @@ from src.rag_engine import (
     finalize_response,
     rewrite_query,
 )
+from src.suggestions import NO_SUGGESTION, QuerySuggester, QuerySuggestion, hint_from_index
+
+logger = logging.getLogger(__name__)
 
 
 class RAGService:
@@ -34,6 +38,23 @@ class RAGService:
         self.settings = settings
         self.retriever = retriever
         self.llm = llm
+        # Önbellek anahtarı (tenant, departman kümesi, indeks parmak izi, soru) → kapsamlar arası sızıntı yok
+        self.suggester = QuerySuggester(llm, enabled=settings.query_suggestions)
+
+    async def suggest(self, tenant: TenantContext, question: str, departments: Sequence[str]) -> QuerySuggestion:
+        """"Bunu mu sormak istediniz?" — ipucu YALNIZCA kullanıcının erişebildiği departmanların BM25 indeksinden
+        (RLS'li oturum) kurulur; başka departmanın belge adı/başlığı modele de yanıta da girmez. Asla yükseltmez."""
+        if not self.suggester.enabled or not departments or not question.strip():
+            return NO_SUGGESTION
+        try:
+            async with self.db.tenant_session(tenant.id, tenant.departments) as session:
+                index = await self.retriever.bm25_index(session, tenant, departments)
+            hint = await asyncio.to_thread(hint_from_index, index)
+            scope = (str(tenant.id), *sorted(departments))
+            return await asyncio.to_thread(self.suggester.suggest, question, hint, scope=scope)
+        except Exception:  # öneri yardımcıdır: hata ana yanıtı asla bozmaz
+            logger.exception("[%s] Soru önerisi üretilemedi", tenant.slug)
+            return NO_SUGGESTION
 
     async def ask(
         self,

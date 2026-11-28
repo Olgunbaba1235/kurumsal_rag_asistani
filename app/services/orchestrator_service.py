@@ -18,14 +18,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from app.schemas.agent import Intent
 from app.services.analytics_service import data_confidence, heuristic_route
 from app.services.rag_service import RAGService
 from app.services.tenant_service import TenantContext
 from app.services.text_to_sql_service import SCHEMA_DESCRIPTION, SQLAnswer, TextToSQLService
-from src.llm import LLM, LLMError, Message
+from src.llm import LLM, LLMError, Message, StructuredOutput
 from src.rag_engine import RAGResponse
 
 logger = logging.getLogger(__name__)
@@ -34,12 +34,12 @@ _ROUTE_TO_INTENT = {"documents": Intent.DOCUMENT_ONLY, "data": Intent.SQL_ONLY, 
 _MAX_ROWS_FOR_SYNTHESIS = 20
 
 
-class _IntentDecision(BaseModel):
+class _IntentDecision(StructuredOutput):
     intent: Intent
     reason: str = Field(description="Kısa Türkçe gerekçe")
 
 
-class _ReportDraft(BaseModel):
+class _ReportDraft(StructuredOutput):
     title: str
     executive_summary: str
     key_findings: list[str]
