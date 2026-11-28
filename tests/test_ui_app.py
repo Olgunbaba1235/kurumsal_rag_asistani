@@ -221,3 +221,165 @@ def test_user_login_uses_bearer_token_and_hides_analytics(api, monkeypatch):
     assert any("yalnızca şirket sahibi ve yöneticilere" in i.value for i in at.info)
     assert at.sidebar.multiselect[0].options == ["İK"]
     assert SESSION["token"] not in " ".join(m.value for m in at.markdown)  # belirteç ekrana yazılmaz
+
+
+# ------------------------------------------------------------------ "Bunu mu sormak istediniz?" (/chat/query)
+TYPO_Q = "yıllık izn kaç gün"
+FIXED_Q = "Yıllık izin kaç gündür?"
+INTENTS = ["Yıllık Ücretli İzin nelerdir?", "Hastalık İzni ile ilgili kurallar nelerdir?",
+           "Mazeret İzni ile ilgili kurallar nelerdir?"]
+
+
+def chat_response(question: str, suggestion: dict | None) -> dict:
+    """Gerçek `ChatResponse` şemasından geçirilmiş /chat/query yanıtı (şema sapması testte yakalanır)."""
+    from app.schemas.chat import ChatResponse
+
+    body = {
+        "answer": f"Yanıt: {question} [IK.md - Sayfa 1]", "is_answered": True, "confidence": 88,
+        "citations": [{"label": "IK.md - Sayfa 1", "source": "IK.md", "page": 1, "department": "Finans",
+                       "relevance": 91.0, "evidence": "Yıllık izin 14 gündür."}],
+        "evidence": [], "rewritten_query": question, "search_queries": [question], "departments": ["Finans"],
+        "reranker": "lexical", "timings_ms": {"total_ms": 12.0}, "total_ms": 12.0, "warnings": [],
+        "suggestion": suggestion,
+    }
+    return ChatResponse.model_validate(body).model_dump(mode="json")
+
+
+@pytest.fixture
+def chat_api(api, monkeypatch):  # noqa: ANN001, ANN201
+    """`api` yönlendirmesine /chat/query ekler; `suggestions[soru]` → API'nin döndüreceği öneri."""
+    _, seen = api
+    suggestions: dict[str, dict | None] = {}
+    inner = httpx.request
+
+    def route(method, url, headers=None, timeout=None, **kw):  # noqa: ANN001, ANN202
+        path = httpx.URL(url).path
+        if path == "/api/v1/chat/query":
+            seen.append({"method": method, "path": path, "headers": dict(headers or {}), **kw})
+            body = kw["json"]
+            sug = suggestions.get(body["question"]) if body.get("suggest", True) else None
+            return httpx.Response(200, json=chat_response(body["question"], sug), request=httpx.Request(method, url))
+        return inner(method, url, headers=headers, timeout=timeout, **kw)
+
+    monkeypatch.setattr(httpx, "request", route)
+    return seen, suggestions
+
+
+def chat_calls(seen: list[dict]) -> list[dict]:
+    return [s for s in seen if s["path"] == "/api/v1/chat/query"]
+
+
+def boxes(at) -> list[str]:  # noqa: ANN001
+    return [i.value.replace("\\", "") for i in at.info if "Bunu mu sormak istediniz" in i.value]
+
+
+def suggest_buttons(at) -> list:  # noqa: ANN001
+    return [b for b in at.button if b.key and b.key.startswith("b2b_suggest_")]
+
+
+def doc_only_app() -> AppTest:
+    from ui.streamlit_app import INTENT_LABELS
+
+    at = new_app()
+    next(s for s in at.selectbox if s.label == "Niyet").set_value(INTENT_LABELS["DOCUMENT_ONLY"]).run()
+    return at
+
+
+def test_typo_suggestion_box_and_one_click_reask_without_loop(chat_api):
+    seen, suggestions = chat_api
+    suggestions[TYPO_Q] = {"has_suggestion": True, "suggested_query": FIXED_Q, "alternatives": [], "kind": "typo"}
+    suggestions[FIXED_Q] = {"has_suggestion": True, "suggested_query": "döngü olmamalı", "alternatives": [],
+                            "kind": "typo"}
+    at = doc_only_app()
+    at.chat_input[0].set_value(TYPO_Q).run()
+    assert not at.exception, at.exception
+    (call,) = chat_calls(seen)
+    assert call["json"]["suggest"] is True and call["headers"] == {"X-API-Key": KEY_A}
+    assert not agent_calls(seen)  # yalnızca doküman niyeti /chat/query ile yanıtlanır
+    assert boxes(at) == ["Bunu mu sormak istediniz: **Yıllık izin kaç gündür**?"]
+    assert any(f"Yanıt: {TYPO_Q}" in m.value for m in at.markdown)
+    (button,) = suggest_buttons(at)
+    assert button.label == "🔁 Önerilen soruyla sor"
+
+    button.click().run()
+    assert not at.exception, at.exception
+    second = chat_calls(seen)[-1]
+    assert second["json"]["question"] == FIXED_Q and second["json"]["suggest"] is False
+    assert [h["content"] for h in second["json"]["history"] if h["role"] == "user"] == [TYPO_Q]
+    assert [m.name for m in at.chat_message] == ["user", "assistant", "user", "assistant"]
+    assert not suggest_buttons(at) and len(boxes(at)) == 1  # eski kutu butonsuz kalır, yeni kutu yok
+    assert "döngü olmamalı" not in " ".join(boxes(at))
+
+
+def test_ambiguous_question_offers_intent_buttons(chat_api):
+    seen, suggestions = chat_api
+    suggestions["izin"] = {"has_suggestion": True, "suggested_query": INTENTS[0], "alternatives": INTENTS,
+                           "kind": "ambiguous"}
+    at = doc_only_app()
+    at.chat_input[0].set_value("izin").run()
+    assert not at.exception, at.exception
+    assert len(boxes(at)) == 1 and "birden fazla konuya" in boxes(at)[0]
+    buttons = suggest_buttons(at)
+    assert [b.label for b in buttons] == INTENTS
+    buttons[1].click().run()
+    assert not at.exception, at.exception
+    assert chat_calls(seen)[-1]["json"]["question"] == INTENTS[1] and chat_calls(seen)[-1]["json"]["suggest"] is False
+    assert not suggest_buttons(at)
+    assert all(o in boxes(at)[0] for o in INTENTS)  # geçmişte butonsuz liste
+
+
+def test_no_suggestion_means_no_box_and_sources_are_shown(chat_api):
+    at = doc_only_app()
+    at.chat_input[0].set_value("Yıllık izin kaç gündür?").run()
+    assert not at.exception, at.exception
+    assert not boxes(at) and not suggest_buttons(at)
+    assert "📄 Doküman kaynakları (1)" in [e.label for e in at.expander]
+    assert any("güven %88" in c.value for c in at.caption)
+
+
+def test_suggestion_text_is_markdown_escaped(chat_api):
+    _, suggestions = chat_api
+    suggestions[TYPO_Q] = {"has_suggestion": True, "suggested_query": "**kalın** [x](http://y) <b>",
+                           "alternatives": [], "kind": "typo"}
+    at = doc_only_app()
+    at.chat_input[0].set_value(TYPO_Q).run()
+    raw = next(i.value for i in at.info if "Bunu mu" in i.value)
+    assert "\\*\\*kalın\\*\\*" in raw and "\\[x\\]" in raw and "\\<b\\>" in raw
+
+
+def test_automatic_intent_for_admin_still_uses_agent(chat_api):
+    seen, _ = chat_api
+    at = new_app()
+    at.chat_input[0].set_value("İskonto tavanını aşan siparişler hangileri?").run()
+    assert not at.exception, at.exception
+    assert agent_calls(seen) and not chat_calls(seen)
+
+
+def test_logged_in_user_without_analytics_gets_document_chat_with_suggestions(chat_api, monkeypatch):
+    seen, suggestions = chat_api
+    suggestions[TYPO_Q] = {"has_suggestion": True, "suggested_query": FIXED_Q, "alternatives": [], "kind": "typo"}
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: httpx.Response(200, json=SESSION,
+                                                                          request=httpx.Request("POST", url)))
+    from ui.streamlit_app import LOGIN_TENANT
+
+    at = new_app(secrets=None)
+    at.sidebar.selectbox[0].set_value(LOGIN_TENANT).run()
+    inputs = {t.label: t for t in at.sidebar.text_input}
+    inputs["Şirket kısa adı"].input("ornek-holding")
+    inputs["E-posta"].input("calisan@ornek.com")
+    inputs["Parola"].input("x")
+    at.sidebar.button[0].click().run()
+    at.chat_input[0].set_value(TYPO_Q).run()
+    assert not at.exception, at.exception
+    (call,) = chat_calls(seen)
+    assert call["headers"] == {"Authorization": f"Bearer {SESSION['token']}"} and not agent_calls(seen)
+    assert len(boxes(at)) == 1 and len(suggest_buttons(at)) == 1
+
+
+def test_suggestion_options_helper_is_defensive():
+    from ui.streamlit_app import suggestion_options
+
+    assert suggestion_options(None) == [] and suggestion_options({"has_suggestion": False}) == []
+    assert suggestion_options({"has_suggestion": True, "suggested_query": " a ", "alternatives": []}) == ["a"]
+    assert suggestion_options({"has_suggestion": True, "suggested_query": "a",
+                               "alternatives": ["a", "b", "b", "c", "d", " "]}) == ["a", "b", "c"]

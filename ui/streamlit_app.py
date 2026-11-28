@@ -86,6 +86,12 @@ class ApiClient:
             body["intent"] = intent
         return self._request("POST", "/agent/query", json=body)
 
+    def chat_query(self, question: str, departments: list[str], history: list[dict], *, suggest: bool = True) -> dict:
+        """Doküman sohbeti (`/chat/query`): kaynaklı yanıt + "Bunu mu sormak istediniz?" önerisi.
+        `suggest=False`: soru bir öneriden seçildi → API yeniden öneri üretmez (döngü yok)."""
+        body = {"question": question, "departments": departments or None, "history": history, "suggest": suggest}
+        return self._request("POST", "/chat/query", json=body)
+
     def analytics_query(self, question: str, departments: list[str], mode: str) -> dict:
         body = {"question": question, "departments": departments or None, "mode": mode}
         return self._request("POST", "/analytics/query", json=body)
@@ -112,7 +118,10 @@ def history_payload(messages: list[dict], limit: int = 10) -> list[dict]:
     """Sohbet geçmişini API'nin `ChatTurn` biçimine çevirir (yalnızca metin turları)."""
     turns = []
     for m in messages:
-        text = m["content"] if m["role"] == "user" else (m.get("report") or {}).get("executive_summary", "")
+        if m["role"] == "user" or m.get("kind") == "chat":
+            text = m["content"]
+        else:
+            text = (m.get("report") or {}).get("executive_summary", "")
         if text:
             turns.append({"role": m["role"], "content": text})
     return turns[-limit:]
@@ -214,8 +223,74 @@ def render_agent_message(m: dict) -> None:
                 st.write(f"- {w}")
 
 
+_MD_SPECIAL = str.maketrans({c: "\\" + c for c in "\\`*_{}[]()<>#+-.!|$~"})
+
+
+def md_escape(text: str) -> str:
+    """API/model metni markdown olarak yorumlanmasın (öneri kutusu)."""
+    return (text or "").translate(_MD_SPECIAL)
+
+
+def suggestion_options(suggestion: dict | None) -> list[str]:
+    """`/chat/query` → `suggestion` alanından tıklanabilir sorular (en çok 3; yoksa boş)."""
+    if not suggestion or not suggestion.get("has_suggestion"):
+        return []
+    options = [o for o in suggestion.get("alternatives") or [] if isinstance(o, str) and o.strip()]
+    if not options and str(suggestion.get("suggested_query") or "").strip():
+        options = [suggestion["suggested_query"]]
+    return list(dict.fromkeys(o.strip() for o in options))[:3]
+
+
+def queue_question(chat_key: str, text: str) -> None:
+    """Öneri butonu callback'i: soru bir sonraki çalıştırmada "kabul edilmiş" olarak (öneri istemeden) sorulur."""
+    st.session_state.setdefault("b2b_pending", {})[chat_key] = text
+
+
+def render_suggestion(suggestion: dict | None, *, key: str, chat_key: str, latest: bool) -> None:
+    """"Bunu mu sormak istediniz?" kutusu yanıtın üstünde. Butonlar yalnızca son mesajda gösterilir."""
+    options = suggestion_options(suggestion)
+    if not options:
+        return
+    if len(options) == 1:
+        st.info(f"Bunu mu sormak istediniz: **{md_escape(options[0].rstrip(' ?'))}**?", icon="💡")
+        if latest:
+            st.button("🔁 Önerilen soruyla sor", key=f"b2b_suggest_{key}_0", on_click=queue_question,
+                      args=(chat_key, options[0]), help=options[0])
+        return
+    listed = "" if latest else "  \n" + "  \n".join(f"• {md_escape(o)}" for o in options)
+    st.info("**Bunu mu sormak istediniz?** Sorunuz birden fazla konuya karşılık gelebilir; birini seçin." + listed,
+            icon="🧭")
+    if latest:
+        for i, (col, option) in enumerate(zip(st.columns(len(options)), options, strict=True)):
+            col.button(option, key=f"b2b_suggest_{key}_{i}", on_click=queue_question, args=(chat_key, option),
+                       width="stretch", help=option)
+
+
+def render_chat_message(m: dict, *, key: str, chat_key: str, latest: bool) -> None:
+    """`/chat/query` yanıtı: öneri kutusu + kaynaklı yanıt + güven/süre + kaynaklar."""
+    render_suggestion(m.get("suggestion"), key=key, chat_key=chat_key, latest=latest)
+    st.markdown(m["answer"])
+    st.caption(f"📄 Doküman sohbeti · güven %{m.get('confidence', 0)} · {float(m.get('total_ms') or 0):.0f} ms")
+    citations = m.get("citations") or []
+    if citations:
+        with st.expander(f"📄 Doküman kaynakları ({len(citations)})"):
+            for c in citations:
+                st.markdown(f"- **{c['label']}** — {c.get('department') or '-'} · ilgi %{float(c.get('relevance') or 0):.0f}")
+    if m.get("warnings"):
+        with st.expander("Uyarılar"):
+            for w in m["warnings"]:
+                st.write(f"- {w}")
+
+
+def uses_document_chat(intent: str | None, can_analytics: bool) -> bool:
+    """Yalnızca doküman niyeti (veya analitik yetkisi olmayan kullanıcıda otomatik niyet — API zaten
+    DOCUMENT_ONLY'ye zorlar) `/chat/query` ile yanıtlanır; öneri bu uç noktadan gelir."""
+    return intent == "DOCUMENT_ONLY" or (intent is None and not can_analytics)
+
+
 # --------------------------------------------------------------------------- sekmeler
-def tab_assistant(api: ApiClient, departments: list[str], messages: list[dict]) -> None:
+def tab_assistant(api: ApiClient, departments: list[str], messages: list[dict], *, chat_key: str = "default",
+                  can_analytics: bool = True) -> None:
     c1, c2 = st.columns([3, 1])
     intent_label = c1.selectbox(
         "Niyet", ["Otomatik", *INTENT_LABELS.values()], help="Otomatik: sorunun niyeti LLM/sezgisel olarak belirlenir"
@@ -224,26 +299,43 @@ def tab_assistant(api: ApiClient, departments: list[str], messages: list[dict]) 
         messages.clear()
         st.rerun()
     intent = next((k for k, v in INTENT_LABELS.items() if v == intent_label), None)
+    pending = st.session_state.setdefault("b2b_pending", {}).pop(chat_key, None)
 
-    for m in messages:
+    last = len(messages) - 1
+    for i, m in enumerate(messages):
         with st.chat_message(m["role"]):
-            st.markdown(m["content"]) if m["role"] == "user" else render_agent_message(m)
+            if m["role"] == "user":
+                st.markdown(m["content"])
+            elif m.get("kind") == "chat":
+                render_chat_message(m, key=str(i), chat_key=chat_key, latest=i == last and pending is None)
+            else:
+                render_agent_message(m)
 
-    if question := st.chat_input("Örn. 250.000 TL üzeri siparişler hangileri ve kim onaylar?"):
+    typed = st.chat_input("Örn. 250.000 TL üzeri siparişler hangileri ve kim onaylar?", max_chars=2000)
+    question, accepted = (pending, True) if pending else (typed, False)
+    if question:
         hist = history_payload(messages)
         messages.append({"role": "user", "content": question})
         with st.chat_message("user"):
             st.markdown(question)
+        document_chat = accepted or uses_document_chat(intent, can_analytics)
         with st.chat_message("assistant"):
-            with st.spinner("Ajanlar çalışıyor…"):
+            with st.spinner("Kaynaklar aranıyor…" if document_chat else "Ajanlar çalışıyor…"):
                 try:
-                    res = api.agent_query(question, departments, hist, intent)
+                    if document_chat:
+                        res = api.chat_query(question, departments, hist, suggest=not accepted)
+                    else:
+                        res = api.agent_query(question, departments, hist, intent)
                 except ApiError as exc:
                     st.error(str(exc))
                     messages.pop()
                     return
-            msg = {"role": "assistant", "content": res["report"]["executive_summary"], **res}
-            render_agent_message(msg)
+            if document_chat:
+                msg = {"role": "assistant", "kind": "chat", "content": res["answer"], **res}
+                render_chat_message(msg, key=str(len(messages)), chat_key=chat_key, latest=True)
+            else:
+                msg = {"role": "assistant", "content": res["report"]["executive_summary"], **res}
+                render_agent_message(msg)
         messages.append(msg)
 
 
@@ -396,7 +488,9 @@ def main() -> None:
     api = ApiClient(base, token=token) if token else ApiClient(base, key)
     t1, t2, t3 = st.tabs(["🤖 Akıllı Kurumsal Asistan", "📁 Doküman Yönetimi", "📊 Canlı Veri Analitiği"])
     with t1:
-        tab_assistant(api, departments, tenant_messages(st.session_state, f"{tenant_id}:{api.identity[-6:]}"))
+        chat_key = f"{tenant_id}:{api.identity[-6:]}"
+        tab_assistant(api, departments, tenant_messages(st.session_state, chat_key), chat_key=chat_key,
+                      can_analytics=can_analytics)
     with t2:
         tab_documents(api, departments, tenant_departments)
     with t3:
