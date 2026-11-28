@@ -89,6 +89,15 @@ Doğrulanmamış / bilinen açıklar:
   400/401/403/404 beklemeden döner; `stream` yalnızca ilk parça gelmeden tekrar dener. `LLMError.user_message`
   Türkçe; `RAGResponse.error` doluysa yanıt "bilgi yok" reddi DEĞİL servis hatasıdır (Denetçi atlanır, arayüz
   "Tekrar dene" gösterir). Testler: `tests/test_robustness.py` (sahte `google.genai` ile).
+  İstek zaman aşımı `LLM_TIMEOUT_SECONDS=30` (`HttpOptions(timeout=ms)`); bekleme üstel + en çok 8 sn. Ana model
+  denemelerden sonra 503 / "overloaded" verirse veya zaman aşımına uğrarsa (aynı model ikinci kez beklenmez)
+  istek `fast_llm_model` ile tekrarlanır (`LLM_FALLBACK_TO_FAST`); 429/4xx ve akış başladıktan sonraki hatalar
+  model değiştirmez. `GeminiLLM.last_model` son yanıtı veren modeldir.
+- "Bunu mu sormak istediniz?": `rag_engine.suggest_query` (fast_model, JSON `{"has_suggestion","suggested_query"}`),
+  `RAGEngine.suggest` / `LocalWorkspace.suggest`; arayüz ana aramadan önce çağırır, `st.info` + "Önerilen soruyla
+  sor" butonu yanıtın üstünde. Yalnızca harf/noktalama/Türkçe karakter farkı, boş veya >300 karakterlik öneri ve
+  her model hatası "öneri yok" sayılır (arama asla engellenmez). Çevrimdışı modda ve `QUERY_SUGGESTIONS=false`
+  iken model çağrılmaz. Testler: `tests/test_query_suggestion.py`. Gerçek Gemini ile kalitesi doğrulanmadı.
 - Sıcak yenileme: `src/` içinde fonksiyon içinden `from src…` yapmayın (Streamlit modülleri boşaltırken
   `KeyError: 'src'`); `app.py` yarım/yabancı `src` modüllerini temizleyip yeniden yükler, eski sınıftan kalan
   çalışma alanını yeniden kurar. Atıf eşleştirme önce uzantılı tam adla yapılır (tr.pdf ≠ tr.docx).

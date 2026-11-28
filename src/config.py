@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     embedding_model: str = Field(default="gemini-embedding-001", alias="EMBEDDING_MODEL")
     embedding_dimension: int = Field(default=768, ge=128, le=3072, alias="EMBEDDING_DIMENSION")
     llm_temperature: float = Field(default=0.1, ge=0.0, le=2.0, alias="LLM_TEMPERATURE")
+    # Tek bir Gemini isteğinin en uzun bekleme süresi (sn). Aşılırsa istek kesilir; ana model zaman aşımına
+    # uğrarsa aynı modelde beklemeden fast_llm_model'e geçilir.
+    llm_timeout_seconds: float = Field(default=30.0, ge=1.0, le=600.0, alias="LLM_TIMEOUT_SECONDS")
+    # Ana model 503 / "overloaded" / zaman aşımı verirse (tekrar denemelerden sonra) fast_llm_model ile dene
+    llm_fallback_to_fast: bool = Field(default=True, alias="LLM_FALLBACK_TO_FAST")
 
     # ------------------------------------------------------------ ChromaDB
     chroma_persist_dir: Path = Field(default=Path("data/chroma"), alias="CHROMA_PERSIST_DIR")
@@ -64,6 +69,8 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------ Üretim
     query_rewriting: bool = Field(default=True, alias="QUERY_REWRITING")
+    # "Bunu mu sormak istediniz?": aramadan önce fast_llm_model soruyu yazım/belirsizlik için denetler
+    query_suggestions: bool = Field(default=True, alias="QUERY_SUGGESTIONS")
     history_turns: int = Field(default=4, ge=0, le=20, alias="HISTORY_TURNS")
 
     # ------------------------------------------------------------ Doğrulama

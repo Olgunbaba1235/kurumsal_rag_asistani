@@ -31,7 +31,7 @@ from src.document_loader import ProcessedDocument, process_document
 from src.embeddings import HashingEmbedder
 from src.hybrid_retriever import HybridRetriever, LexicalReranker
 from src.llm import GeminiLLM, LLMError, Message
-from src.rag_engine import RAGEngine, RAGResponse, citation_coverage, rewrite_query
+from src.rag_engine import QuerySuggestion, RAGEngine, RAGResponse, citation_coverage, rewrite_query
 from src.search_types import SearchResult
 from src.text_utils import fold, tokenize
 
@@ -292,7 +292,8 @@ class LocalWorkspace:
         self.store = InMemoryVectorStore(self.settings)
         self.llm, self.mode = self._make_llm(api_key or self.settings.api_key)
         if self.mode == OFFLINE_MODE:
-            self.settings = self.settings.model_copy(update={"query_rewriting": False})
+            # Çevrimdışı özetleyicide yapısal çıktı yok: yeniden yazma ve soru önerisi model çağırmaz
+            self.settings = self.settings.model_copy(update={"query_rewriting": False, "query_suggestions": False})
         self.engine = RAGEngine(HybridRetriever(self.store, LexicalReranker(), self.settings), self.llm, self.settings)
         # Denetçi: Gemini modunda hızlı Flash modeliyle, aksi halde çevrimdışı kural tabanlı
         self.auditor = GeminiAuditor(self.llm) if self.mode == GEMINI_MODE else RuleBasedAuditor()
@@ -303,7 +304,9 @@ class LocalWorkspace:
         if api_key:
             try:
                 s = get_settings()
-                return GeminiLLM(api_key, s.llm_model, s.fast_llm_model, s.llm_temperature), GEMINI_MODE
+                return GeminiLLM(api_key, s.llm_model, s.fast_llm_model, s.llm_temperature,
+                                 timeout=s.llm_timeout_seconds,
+                                 fallback_to_fast=s.llm_fallback_to_fast), GEMINI_MODE
             except Exception as exc:  # noqa: BLE001 — paket yok/anahtar geçersiz: demo yine çalışsın
                 logger.warning("Gemini başlatılamadı, çevrimdışı moda geçiliyor: %s", exc)
         return OfflineSummarizer(), OFFLINE_MODE
@@ -336,6 +339,10 @@ class LocalWorkspace:
         return sorted(self.store.documents.values(), key=lambda d: d.added_at)
 
     # ------------------------------------------------------------ soru-cevap
+    def suggest(self, question: str) -> QuerySuggestion:
+        """Ana aramadan önce "Bunu mu sormak istediniz?" önerisi (yoksa `has_suggestion=False`)."""
+        return self.engine.suggest(question)
+
     def start(self, question: str, history: Sequence[Message] = (),
               departments: Sequence[str] | None = None, *, audit: bool = True) -> PendingTurn:
         """Yanıtı akışlı başlatır. Tek parçalı ve alaka kapısını geçen soruda model çıktısı token token akar;

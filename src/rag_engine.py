@@ -121,6 +121,77 @@ def rewrite_query(
     return RewrittenQuery(question, standalone, variants, "llm")
 
 
+# =============================================================== "Bunu mu sormak istediniz?"
+@dataclass(slots=True)
+class QuerySuggestion:
+    """Aramadan önce üretilen soru düzeltme önerisi. JSON karşılığı: `to_dict()`."""
+
+    has_suggestion: bool = False
+    suggested_query: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"has_suggestion": self.has_suggestion, "suggested_query": self.suggested_query}
+
+
+NO_SUGGESTION = QuerySuggestion()
+
+
+class _QuerySuggestionOut(BaseModel):
+    has_suggestion: bool = Field(
+        description="Soruda yazım hatası, anlam bozukluğu, eksik ifade veya belirsizlik varsa true; soru zaten "
+        "açık, net ve dilbilgisi açısından düzgünse false"
+    )
+    suggested_query: str = Field(
+        default="", description="has_suggestion true ise düzeltilmiş, net soru; aksi halde boş metin"
+    )
+
+
+_SUGGEST_SYSTEM = """Sen kurumsal bir doküman asistanında soru kalitesi denetleyicisisin. Soruyu YANITLAMA.
+Görevin, kullanıcının sorusunun aramaya hazır olup olmadığına karar vermektir.
+
+- Soruda yazım hatası, anlam bozukluğu, eksik ifade veya belirsizlik VARSA: has_suggestion=true ve
+  suggested_query alanına aynı bilgi ihtiyacını kurumsal politika/prosedür diliyle ifade eden TEK, net,
+  dilbilgisi açısından düzgün bir soru yaz.
+- Soru zaten açık, net ve dilbilgisi açısından düzgünse: has_suggestion=false ve suggested_query="".
+  Büyük/küçük harf, noktalama, Türkçe karakter eksikliği (ı/i, ş/s…) veya kısa ama anlaşılır sorular için
+  öneri ÜRETME; gereksiz uyarı istemiyoruz.
+- Kullanıcının niyetini değiştirme; yeni konu, rakam, tarih, departman veya varsayım EKLEME.
+- Kullanıcının dilini koru (varsayılan Türkçe)."""
+
+_MAX_SUGGESTION_CHARS = 300
+
+
+def _same_question(a: str, b: str) -> bool:
+    """Yalnızca büyük/küçük harf, noktalama veya Türkçe karakter farkı → aynı soru (öneri gereksiz)."""
+    def norm(text: str) -> str:
+        return re.sub(r"\W+", " ", fold(text)).strip()
+
+    return norm(a) == norm(b)
+
+
+def suggest_query(question: str, llm: LLM | None) -> QuerySuggestion:
+    """Ana aramadan önce fast_model ile soruyu denetler ve gerekirse düzeltilmiş bir soru önerir.
+
+    Hafif ve güvenli: LLM yoksa, hata verirse veya geçersiz/anlamsız bir öneri dönerse öneri yoktur —
+    arama hiçbir koşulda bu adım yüzünden durmaz. Önerinin özgün soruyla aynı (yalnızca harf/noktalama
+    farkı) olması da "öneri yok" sayılır.
+    """
+    question = (question or "").strip()
+    if llm is None or not question:
+        return NO_SUGGESTION
+    try:
+        out = llm.generate_json(f"KULLANICI SORUSU: {question}", _QuerySuggestionOut,
+                                system=_SUGGEST_SYSTEM, fast=True)
+    except Exception as exc:  # noqa: BLE001 — öneri isteğe bağlıdır; hiçbir hata aramayı engellememeli
+        logger.info("Soru önerisi alınamadı (%s); öneri gösterilmeyecek.", exc)
+        return NO_SUGGESTION
+    suggested = re.sub(r"\s+", " ", out.suggested_query or "").strip()
+    if (not out.has_suggestion or not suggested or len(suggested) > _MAX_SUGGESTION_CHARS
+            or _same_question(suggested, question)):
+        return NO_SUGGESTION
+    return QuerySuggestion(True, suggested)
+
+
 # =============================================================== Prompt
 GROUNDED_SYSTEM_PROMPT = f"""Sen bir kurumsal bilgi asistanısın. Kullanıcının sorusunu YALNIZCA aşağıdaki \
 BAĞLAM bölümünde verilen doküman parçalarına dayanarak yanıtlarsın.
@@ -451,7 +522,8 @@ class RAGEngine:
 
         s = settings or get_settings()
         s.ensure_dirs()
-        llm = GeminiLLM(s.api_key, s.llm_model, s.fast_llm_model, s.llm_temperature)
+        llm = GeminiLLM(s.api_key, s.llm_model, s.fast_llm_model, s.llm_temperature,
+                        timeout=s.llm_timeout_seconds, fallback_to_fast=s.llm_fallback_to_fast)
         store = VectorStore(GeminiEmbedder(s.api_key, s.embedding_model, s.embedding_dimension), s)
         reranker = LLMReranker(llm) if s.use_llm_reranker else LexicalReranker()
         return cls(HybridRetriever(store, reranker, s), llm, s)
@@ -503,6 +575,13 @@ class RAGEngine:
         )
 
     # ------------------------------------------------------------ genel API
+    def suggest(self, question: str) -> QuerySuggestion:
+        """"Bunu mu sormak istediniz?" önerisi (fast_model). Ana aramadan önce çağrılır; `QUERY_SUGGESTIONS`
+        kapalıysa veya dil modeli yoksa model çağrılmaz."""
+        if not self.settings.query_suggestions or self.llm is None:
+            return NO_SUGGESTION
+        return suggest_query(question, self.llm)
+
     def ask_stream(
         self,
         question: str,

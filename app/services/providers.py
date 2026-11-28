@@ -26,7 +26,8 @@ def build_providers(settings: ApiSettings) -> Providers:
 
     llm: LLM | None = None
     if settings.llm_provider == "gemini":
-        llm = GeminiLLM(settings.api_key, settings.llm_model, settings.fast_llm_model, settings.llm_temperature)
+        llm = GeminiLLM(settings.api_key, settings.llm_model, settings.fast_llm_model, settings.llm_temperature,
+                        timeout=settings.llm_timeout_seconds, fallback_to_fast=settings.llm_fallback_to_fast)
 
     reranker: Reranker = LLMReranker(llm) if (llm is not None and settings.use_llm_reranker) else LexicalReranker()
     return Providers(embedder=embedder, llm=llm, reranker=reranker)

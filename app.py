@@ -75,7 +75,7 @@ for _attempt in range(3):
         from src.config import get_settings
         from src.document_loader import DocumentProcessingError
         from src.local_engine import OFFLINE_MODE, AnswerInsight, LocalWorkspace
-        from src.rag_engine import RAGResponse
+        from src.rag_engine import QuerySuggestion, RAGResponse
         from ui import showcase_charts as charts
         from ui import showcase_theme as theme
         from ui.citations import number_citations, streaming_view
@@ -360,8 +360,25 @@ def render_audit_report(audit: AuditResult, resp: RAGResponse, insight: AnswerIn
                 st.markdown(theme.audit_row(c.text, c.reason, c.supported), unsafe_allow_html=True)
 
 
+_MD_SPECIAL = str.maketrans({c: "\\" + c for c in "\\`*_{}[]()<>#+-.!|$~"})
+
+
+def render_suggestion(suggestion: QuerySuggestion | None, *, key: str, latest: bool = True) -> None:
+    """"Bunu mu sormak istediniz?" kutusu (cevabın hemen üstünde) + tek tıkla önerilen soruyla yeniden sor."""
+    if suggestion is None or not suggestion.has_suggestion:
+        return
+    # Sondaki "?" kalıba eklenir (çift soru işareti olmasın); model çıktısı markdown olarak yorumlanmasın
+    shown = suggestion.suggested_query.rstrip(" ?").translate(_MD_SPECIAL)
+    st.info(f"Bunu mu sormak istediniz: **{shown}**?", icon="💡")
+    if latest:
+        st.button("🔁 Önerilen soruyla sor", key=f"suggest_{key}", on_click=_submit,
+                  args=(suggestion.suggested_query,), help=suggestion.suggested_query)
+
+
 def render_answer(msg: dict, *, key: str, delay: float = 0.0, latest: bool = True, text_slot=None) -> None:  # noqa: ANN001
     """Yanıt metni (Denetçi kararıyla) + rozet + meta satırı + filtre nedeni + kaynak kartları + rapor."""
+    if text_slot is None:  # canlı akışta öneri kutusu zaten yanıt yuvasının üstüne çizildi
+        render_suggestion(msg.get("suggestion"), key=key, latest=latest)
     resp: RAGResponse = msg["response"]
     audit: AuditResult | None = msg.get("audit")
     insight: AnswerInsight | None = msg.get("insight")
@@ -444,6 +461,10 @@ def process_submission(tenant: str, ws: LocalWorkspace, question: str, departmen
     with st.chat_message("assistant", avatar="🧠"):
         auditing = bool(ss.auditor_on)
         status = st.empty()
+        # "Bunu mu sormak istediniz?": ana aramadan önce hızlı modelle soru denetimi (hata → öneri yok)
+        status.markdown('<div class="meta">🧭 Soru kontrol ediliyor…</div>', unsafe_allow_html=True)
+        suggestion = ws.suggest(question)
+        render_suggestion(suggestion, key=str(len(msgs) + 1))  # kayıttan sonra yanıtın sohbet indeksi
         text_slot = st.empty()
         status.markdown('<div class="meta">🔎 Kaynaklar aranıyor…</div>', unsafe_allow_html=True)
         pending = ws.start(question, history, departments, audit=auditing)
@@ -466,7 +487,8 @@ def process_submission(tenant: str, ws: LocalWorkspace, question: str, departmen
         # Kayıt: finish() ile bu satırlar arasında Streamlit çağrısı yok → rerun burayı bölemez
         msgs.append({"role": "user", "content": question})
         msgs.append({"role": "assistant", "content": turn.audit.answer, "question": question,
-                     "response": turn.response, "audit": turn.audit, "insight": turn.insight})
+                     "response": turn.response, "audit": turn.audit, "insight": turn.insight,
+                     "suggestion": suggestion})
         on_recorded()
         status.empty()
         render_answer(msgs[-1], key=str(len(msgs) - 1), text_slot=text_slot)

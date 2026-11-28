@@ -136,10 +136,16 @@ def fake_genai(monkeypatch):
     errors = types.ModuleType("google.genai.errors")
     errors.APIError = _APIError
     gtypes = types.ModuleType("google.genai.types")
-    for name in ("GenerateContentConfig", "Content", "Part", "EmbedContentConfig"):
+    for name in ("GenerateContentConfig", "Content", "Part", "EmbedContentConfig", "HttpOptions"):
         setattr(gtypes, name, lambda *a, **k: (a, k))
     genai.errors, genai.types = errors, gtypes
-    genai.Client = lambda api_key: types.SimpleNamespace(models=types.SimpleNamespace())
+    genai.clients = []  # Client'a verilen argümanlar (zaman aşımı doğrulaması için)
+
+    def client(api_key, **kwargs):
+        genai.clients.append({"api_key": api_key, **kwargs})
+        return types.SimpleNamespace(models=types.SimpleNamespace())
+
+    genai.Client = client
     google = sys.modules.get("google") or types.ModuleType("google")
     monkeypatch.setitem(sys.modules, "google", google)
     monkeypatch.setattr(google, "genai", genai, raising=False)
@@ -148,13 +154,15 @@ def fake_genai(monkeypatch):
     return genai
 
 
-def _llm(script: list) -> tuple[GeminiLLM, dict]:
-    """script: her çağrı için ya bir istisna ya da üretilecek parça listesi."""
-    llm = GeminiLLM("test-key")
+def _llm(script: list, **kwargs) -> tuple[GeminiLLM, dict]:
+    """script: her çağrı için ya bir istisna ya da üretilecek parça listesi. `calls["models"]` her çağrının
+    hangi modele gittiğini sırayla tutar."""
+    llm = GeminiLLM("test-key", **kwargs)
     llm.retry_base_delay = 0.0
-    calls = {"stream": 0, "json": 0}
+    calls = {"stream": 0, "json": 0, "models": []}
 
-    def stream(**_):
+    def stream(**kw):
+        calls["models"].append(kw["model"])
         step = script[calls["stream"]]
         calls["stream"] += 1
         for item in step:
@@ -162,7 +170,8 @@ def _llm(script: list) -> tuple[GeminiLLM, dict]:
                 raise item
             yield types.SimpleNamespace(text=item)
 
-    def generate(**_):
+    def generate(**kw):
+        calls["models"].append(kw["model"])
         step = script[calls["json"]]
         calls["json"] += 1
         if isinstance(step, Exception):
@@ -216,6 +225,93 @@ def test_json_generation_retries_503(fake_genai):
 
     llm, calls = _llm([_APIError(503), '{"ok": true}'])
     assert llm.generate_json("p", Out).ok is True and calls["json"] == 2
+
+
+# ---------------------------------------------------------------------- zaman aşımı + fast_model'e geçiş
+MAIN, FAST = "gemini-3.5-flash", "gemini-3.5-flash-lite"
+
+
+def test_default_llm_timeout_is_30_seconds_and_reaches_client(fake_genai):
+    assert Settings(_env_file=None).llm_timeout_seconds == 30.0
+    GeminiLLM("test-key")
+    _args, kwargs = fake_genai.clients[-1]["http_options"]
+    assert kwargs == {"timeout": 30_000}  # google-genai zaman aşımını milisaniye alır
+    GeminiLLM("test-key", timeout=12.5)
+    assert fake_genai.clients[-1]["http_options"][1] == {"timeout": 12_500}
+
+
+def test_stream_falls_back_to_fast_model_after_repeated_503(fake_genai):
+    llm, calls = _llm([[_APIError(503)]] * 3 + [["Yedek ", "yanıt"]])
+    assert "".join(llm.stream([("user", "soru")])) == "Yedek yanıt"
+    assert calls["models"] == [MAIN, MAIN, MAIN, FAST] and llm.last_model == FAST
+
+
+def test_overloaded_message_without_503_also_falls_back(fake_genai):
+    llm, calls = _llm([[_APIError(500, "The model is overloaded. Please try again later.")]] * 3 + [["tamam"]])
+    assert list(llm.stream([("user", "soru")])) == ["tamam"] and calls["models"][-1] == FAST
+
+
+def test_timeout_switches_to_fast_model_without_waiting_again(fake_genai):
+    llm, calls = _llm([[TimeoutError("read timeout")], ["hızlı"]])
+    assert list(llm.stream([("user", "soru")])) == ["hızlı"]
+    assert calls["models"] == [MAIN, FAST]  # ana model ikinci kez 30 sn beklenmez
+
+
+def test_rate_limit_does_not_switch_models(fake_genai):
+    llm, calls = _llm([[_APIError(429)]] * 3 + [["olmamalı"]])
+    with pytest.raises(LLMError) as exc:
+        list(llm.stream([("user", "soru")]))
+    assert calls["models"] == [MAIN] * 3 and exc.value.code == 429
+
+
+def test_no_fallback_after_stream_started(fake_genai):
+    llm, calls = _llm([["Yarım ", _APIError(503)], ["olmamalı"]])
+    with pytest.raises(LLMError):
+        list(llm.stream([("user", "soru")]))
+    assert calls["models"] == [MAIN]
+
+
+def test_fallback_can_be_disabled(fake_genai):
+    llm, calls = _llm([[_APIError(503)]] * 3 + [["olmamalı"]], fallback_to_fast=False)
+    with pytest.raises(LLMError) as exc:
+        list(llm.stream([("user", "soru")]))
+    assert calls["models"] == [MAIN] * 3 and "yoğun" in exc.value.user_message
+
+
+def test_fast_model_failure_raises_turkish_error_without_crashing(fake_genai):
+    llm, calls = _llm([[_APIError(503)]] * 6)
+    with pytest.raises(LLMError) as exc:
+        list(llm.stream([("user", "soru")]))
+    assert calls["models"] == [MAIN] * 3 + [FAST] * 3 and exc.value.code == 503 and "yoğun" in exc.value.user_message
+
+
+def test_json_main_model_falls_back_but_fast_json_does_not_loop(fake_genai):
+    from pydantic import BaseModel
+
+    class Out(BaseModel):
+        ok: bool
+
+    llm, calls = _llm([_APIError(503)] * 3 + ['{"ok": true}'])
+    assert llm.generate_json("p", Out, fast=False).ok is True
+    assert calls["models"] == [MAIN] * 3 + [FAST]
+
+    llm, calls = _llm([_APIError(503)] * 3)
+    with pytest.raises(LLMError):
+        llm.generate_json("p", Out, fast=True)
+    assert calls["models"] == [FAST] * 3  # zaten hızlı modeldeyken başka geçiş yok
+
+
+def test_backoff_is_exponential_and_capped(monkeypatch):
+    from src import llm as llm_mod
+
+    monkeypatch.setattr(llm_mod.random, "random", lambda: 0.0)
+    assert [llm_mod.backoff_delay(n, 1.0) for n in (1, 2, 3, 4, 10)] == [1.0, 2.0, 4.0, 8.0, 8.0]
+
+
+def test_timeout_error_has_turkish_message():
+    err = LLMError("x", timed_out=True)
+    assert err.should_fallback and "zaman aşımı" in err.user_message
+    assert LLMError("y", code=503).should_fallback and not LLMError("z", code=429).should_fallback
 
 
 @pytest.mark.parametrize("code,needle", [(429, "429"), (503, "yoğun"), (401, "API anahtarı"), (None, "bağlanılamadı")])
